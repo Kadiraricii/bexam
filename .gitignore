@@ -1,0 +1,12 @@
+# Kisisel/hassas veri - sinav PDF'leri, oturum bilgisi, log
+output/
+.state/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/
+.DS_Store

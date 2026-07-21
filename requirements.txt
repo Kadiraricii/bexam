@@ -1,0 +1,10 @@
+# Blackboard Sinav PDF Yakalayici - Python bagimliliklari.
+#
+# Tek disaridan bagimlilik Playwright - GUI (Tkinter), pathlib, json,
+# threading, queue, subprocess, re, datetime gibi digerleri Python'un
+# kendi standart kutuphanesinde geliyor, ayrica kurulum gerektirmiyor.
+#
+# Surum BILEREK sabitlendi (== ile) - "bende calisiyordu ama farkli bir
+# surumde calismiyor" turu surprizleri onlemek icin. setup.sh / setup.bat
+# bu dosyadan aynen kurar.
+playwright==1.61.0
