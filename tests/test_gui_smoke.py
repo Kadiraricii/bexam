@@ -109,11 +109,19 @@ def test_chrome_flag_notice_chevron_expands_and_collapses_on_click(gui_app):
     chevron = find_widgets(gui_app.container, lambda w: isinstance(w, gui_module.ChevronToggle))[0]
     detail = find_labels_containing(gui_app.container, "Chrome açılışta aşağıdaki")[0]
 
-    chevron.event_generate("<Button-1>")
+    # chevron._on_click() DOGRUDAN cagriliyor - event_generate("<Button-1>")
+    # DEGIL: tk_root fixture'i pencereyi withdraw() ile gizliyor (testler
+    # sirasinda ekranda pencere yanip sonmesin diye), ve CANLI DOGRULANDI
+    # ki bu durumda Canvas widget'larda sentetik <Button-1> olayi dogru
+    # yonlenmiyor (fiziksel buton basma olaylari gercek, haritalanmis
+    # ekran koordinatlarina ihtiyac duyuyor). Isleyiciyi dogrudan cagirmak
+    # AYNI kod yolunu (set_expanded + command cagrisi) sinar, pencere
+    # gorunurlugunden bagimsiz sekilde.
+    chevron._on_click()
     gui_app.root.update_idletasks()
     assert is_currently_packed(detail.master)
 
-    chevron.event_generate("<Button-1>")
+    chevron._on_click()
     gui_app.root.update_idletasks()
     assert not is_currently_packed(detail.master)
 
