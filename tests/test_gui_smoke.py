@@ -26,6 +26,27 @@ from conftest import (
 )
 
 
+# ---------- _emoji_font (Windows'ta gri/monokrom emoji hatasi) ----------
+# Windows'ta Tk, emoji karakterlerini VARSAYILAN olarak "Segoe UI Symbol"
+# fontuyla render ediyordu - macOS'taki renkli emoji gorunumunun aksine
+# gri/tek renk, silik bir sonuc (CANLI DOGRULANDI, ekran goruntusuyle).
+# "Segoe UI Emoji" ACIKCA istenirse Tk dogru, renkli glif setini seciyor.
+
+
+def test_emoji_font_uses_segoe_ui_emoji_on_windows(monkeypatch):
+    monkeypatch.setattr(gui_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(gui_module, "_EMOJI_FONT_FAMILY", "Segoe UI Emoji")
+
+    assert gui_module._emoji_font(20) == ("Segoe UI Emoji", 20)
+    assert gui_module._emoji_font(20, "bold") == ("Segoe UI Emoji", 20, "bold")
+
+
+def test_emoji_font_uses_system_default_on_non_windows(monkeypatch):
+    monkeypatch.setattr(gui_module, "_EMOJI_FONT_FAMILY", "")
+
+    assert gui_module._emoji_font(18) == ("", 18)
+
+
 def test_onboarding_screen_builds_and_shows_start_button(gui_app):
     button = find_button_with_text(gui_app.container, "Başla →")
 
