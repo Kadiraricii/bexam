@@ -326,6 +326,50 @@ class StatusDot(tk.Canvas):
         super().destroy()
 
 
+class ChevronToggle(tk.Canvas):
+    """Acilir/kapanir panelller icin kalin, cizgiyle cizilmis bir "v"/"^"
+    ok simgesi (Unicode "▾"/"▴" karakterleri yerine) - bu karakterlerin
+    goruntusu yazi tipine gore macOS/Windows arasinda tutarsiz ve ince/
+    silik gorunebiliyordu. Canvas uzerine kendimiz cizince (bu dosyadaki
+    RoundedButton/StatusDot ile ayni desen) her platformda ayni, kalin ve
+    net bir sekil garanti ediliyor.
+
+    expanded=False iken asagi (v, "genislet"), True iken yukari
+    (^, "daralt") gosterir."""
+
+    def __init__(self, parent, command, size: int = 22, expanded: bool = False) -> None:
+        bg = parent["bg"] if isinstance(parent, (tk.Frame, tk.Canvas)) else COLOR_WARNING_SOFT
+        super().__init__(parent, width=size, height=size, bg=bg, highlightthickness=0, cursor=CURSOR_HAND)
+        self._size = size
+        self._command = command
+        self._expanded = expanded
+        self.bind("<Button-1>", self._on_click)
+        self._draw()
+
+    def _draw(self) -> None:
+        self.delete("all")
+        s = self._size
+        pad = s * 0.28
+        # "v" (kapali/genislet): sol-ust -> orta-alt -> sag-ust
+        # "^" (acik/daralt): sol-alt -> orta-ust -> sag-alt
+        if self._expanded:
+            points = [pad, s - pad, s / 2, pad, s - pad, s - pad]
+        else:
+            points = [pad, pad, s / 2, s - pad, s - pad, pad]
+        self.create_line(
+            *points, fill=COLOR_WARNING, width=2.4, joinstyle="round", capstyle="round", smooth=False,
+        )
+
+    def _on_click(self, _event=None) -> None:
+        self.set_expanded(not self._expanded)
+        if self._command is not None:
+            self._command(self._expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
+        self._draw()
+
+
 class ProgressBar(tk.Canvas):
     """Yatay, yumusak koseli, doldurulabilir bir ilerleme cubugu.
     Kendi zamanlayicisi yok - sadece disaridan gelen 'progress'
@@ -631,7 +675,9 @@ class BlackboardGUI:
         outer.inner = inner
         return outer
 
-    def _build_chrome_flag_notice(self, parent: tk.Widget, wraplength: int = 640) -> tk.Frame:
+    def _build_chrome_flag_notice(
+        self, parent: tk.Widget, wraplength: int = 640, start_expanded: bool = False,
+    ) -> tk.Frame:
         """Chrome'un acilista gosterdigi zararsiz "desteklenmeyen bayrak"
         uyarisini (--disable-blink-features=AutomationControlled - SSO
         otomasyon tespitini onlemek icin bilerek eklenen bayrak, bkz.
@@ -642,10 +688,12 @@ class BlackboardGUI:
 
         wraplength cagirana gore ayarlanabilir.
 
-        Varsayilan olarak KAPALI (kucuk, sadece baslik) baslar - sayfada
-        surekli buyuk yer kaplamasin diye. Basliktaki ok simgesine
-        tiklaninca genisleyip aciklama + Chrome'un tam mesajini gosterir,
-        tekrar tiklaninca kucuk haline doner."""
+        start_expanded=False (varsayilan, ör. Ana Sayfa): KAPALI (kucuk,
+        sadece baslik) baslar - sayfada surekli buyuk yer kaplamasin diye.
+        start_expanded=True (ör. Yardim sayfasi - zaten bilgi almaya
+        gelinen bir sayfa, kucuk baslamasinin bir faydasi yok): direkt
+        ACIK baslar. Her iki durumda da basliktaki ChevronToggle'a
+        tiklanarak durum degistirilebilir."""
         card = tk.Frame(parent, bg=COLOR_WARNING_SOFT)
         inner = tk.Frame(card, bg=COLOR_WARNING_SOFT)
         inner.pack(fill="x", padx=14, pady=10)
@@ -656,11 +704,6 @@ class BlackboardGUI:
             header_row, text="⚠  Beklenen Bir Tarayıcı Uyarısı", bg=COLOR_WARNING_SOFT,
             fg=COLOR_WARNING, font=("", 13, "bold"), anchor="w",
         ).pack(side="left", fill="x", expand=True)
-        toggle_label = tk.Label(
-            header_row, text="▾", bg=COLOR_WARNING_SOFT, fg=COLOR_WARNING,
-            font=("", 15, "bold"), cursor=CURSOR_HAND, padx=6,
-        )
-        toggle_label.pack(side="right")
 
         body = tk.Frame(inner, bg=COLOR_WARNING_SOFT)
         tk.Label(
@@ -698,22 +741,15 @@ class BlackboardGUI:
             justify="left", wraplength=wraplength,
         ).pack(fill="x", pady=(8, 0))
 
-        state = {"expanded": False}
-
-        def _apply_state() -> None:
-            if state["expanded"]:
+        def _apply_expanded(expanded: bool) -> None:
+            if expanded:
                 body.pack(fill="x", pady=(8, 0))
-                toggle_label.config(text="▴")
             else:
                 body.pack_forget()
-                toggle_label.config(text="▾")
 
-        def _toggle(_event=None) -> None:
-            state["expanded"] = not state["expanded"]
-            _apply_state()
-
-        toggle_label.bind("<Button-1>", _toggle)
-        _apply_state()
+        toggle = ChevronToggle(header_row, command=_apply_expanded, expanded=start_expanded)
+        toggle.pack(side="right")
+        _apply_expanded(start_expanded)
         return card
 
     def _log(self, message: str) -> None:
@@ -1734,7 +1770,10 @@ class BlackboardGUI:
                 font=("", 11, "bold"), padx=8, pady=3,
             ).pack(anchor="w")
 
-        self._build_chrome_flag_notice(wrapper).pack(fill="x", pady=(4, 0))
+        # Yardim sayfasi zaten "nasil calisir" bilgisi almaya gelinen bir
+        # sayfa - burada kucuk/kapali baslamanin bir faydasi yok, direkt
+        # acik gosteriyoruz (Ana Sayfa'daki gibi kucuk baslamiyor).
+        self._build_chrome_flag_notice(wrapper, start_expanded=True).pack(fill="x", pady=(4, 0))
 
     # ---------- worker thread: TUM Playwright islemleri burada ----------
 
