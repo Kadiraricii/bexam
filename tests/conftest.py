@@ -45,9 +45,22 @@ def _fake_sync_playwright() -> _FakeSyncPlaywrightContextManager:
     return _FakeSyncPlaywrightContextManager()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def tk_root():
-    """Her testte TEMIZ bir Tk kok penceresi."""
+    """TUM test oturumu icin TEK, paylasilan bir Tk kok penceresi.
+
+    Once her test kendi tk.Tk() ornegini olusturup yok ediyordu - bu
+    CANLI DOGRULANDI ki gercek Windows GitHub Actions runner'inda
+    "Windows fatal exception: code 0x80000003" ile butun test surecini
+    cokertiyor (tam olarak tk.Tk() + threading.Thread.start() ikilisinin
+    hizli ardisik tekrarinda, ikinci testin fixture kurulumu sirasinda -
+    macOS'ta ayni kokten farkli bir belirtiyle - "Fatal Python error:
+    Aborted" - benzer bir kararsizlik zaten yerelde de gozlemlendi).
+    Tek bir Tcl yorumlayicisini oturum boyunca paylasmak bu kategoriyi
+    tamamen ortadan kaldiriyor. Her testin KENDI BlackboardGUI'si (ve
+    worker thread'i) hala ayri ayri olusturulup TEMIZCE kapatiliyor -
+    bkz. gui_app fixture'i; sadece alttaki Tk penceresinin KENDISI
+    paylasiliyor."""
     try:
         root = tk.Tk()
         root.withdraw()  # ekranda gorunmesin, sadece gercekten olusabildigini dogruluyoruz
@@ -94,6 +107,14 @@ def gui_app(tk_root, monkeypatch):
         app.command_queue.put(("quit", None))
         app.worker_thread.join(timeout=10)
     except Exception:
+        pass
+    # tk_root artik OTURUM boyunca PAYLASILIYOR (tek Tk penceresi) - bu
+    # yuzden her testin KENDI ust-duzey container'ini burada acikca yok
+    # etmemiz gerekiyor, aksi halde ardisik testlerin widget agaclari
+    # ayni kok altinda ustuste birikir.
+    try:
+        app.container.destroy()
+    except tk.TclError:
         pass
 
 
