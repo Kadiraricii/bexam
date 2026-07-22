@@ -1,0 +1,6 @@
+# Test-only bagimliliklar - uygulamanin KENDISI (requirements.txt) icin
+# gerekli DEGIL, sadece `pytest` calistirirken lazim (CI ve yerel
+# gelistirme). Kurulum:
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+pytest==8.3.5

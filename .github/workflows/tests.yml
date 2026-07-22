@@ -1,0 +1,62 @@
+name: Testler
+
+# Bu proje SADECE Windows ve macOS'u hedefliyor (bkz. setup.bat/setup.sh,
+# README) - CI matrisi de gercek hedef platformlari yansitiyor, Linux'a
+# hic yer verilmiyor. Bu oturumda bulunan hatalarin buyuk cogunlugu
+# (cursor="pointinghand" ile SADECE Windows'ta acilista cokme,
+# Playwright'in --no-sandbox eklemesi, SSO'nun page.url onbellegini
+# sabitlemesi) SADECE gercek Windows/macOS ortaminda ya da gercek Chrome
+# ile ortaya cikan turden hatalardi.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+
+      - name: Python ${{ matrix.python-version }} kurulumu
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Gercek Google Chrome'un kurulu oldugunu garanti et
+        # Uygulama channel="chrome" ile GERCEK Google Chrome'u suruyor
+        # (Playwright'in kendi bundled Chromium'unu DEGIL - bkz.
+        # common.py::browser_launch_kwargs, SSO tespiti riski). Runner
+        # imajlarinda Chrome genelde hazir gelir ama bunu VARSAYMAK
+        # yerine acikca garanti ediyoruz ki test_browser_launch.py
+        # testleri sessizce SKIP olmak yerine GERCEKTEN calissin.
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Bağımlılıkları kur
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Python sürüm kontrolü (setup.bat/setup.sh ile aynı mantık)
+        # Kod 3.10+ sozdizimi kullaniyor ("X | None" tip imzalari) -
+        # setup.bat/setup.sh'daki kontrolun ayni mantigini CI'da da
+        # dogruluyoruz.
+        run: python -c "import sys; assert sys.version_info >= (3, 10)"
+
+      - name: Tüm modüllerin derlendiğini doğrula (syntax/girinti hataları)
+        # Bu oturumda TAM OLARAK bu turden bir hata (yanlis girintiyle
+        # SyntaxError) manuel duzenleme sirasinda olustu - bu adim onu
+        # pytest'ten once, hizlica yakalar.
+        run: python -m py_compile gui.py common.py capture.py scan_course.py scan_grade_center.py
+
+      - name: pytest çalıştır
+        run: pytest -v
