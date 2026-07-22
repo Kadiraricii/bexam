@@ -167,7 +167,11 @@ def read_log() -> list[dict]:
     if not LOG_PATH.exists():
         return []
     try:
-        return json.loads(LOG_PATH.read_text())
+        # encoding acikca UTF-8: Windows'ta varsayilan yerel kodlama (ör.
+        # cp1254) kullanilirsa, Turkce/ozel karakter iceren basliklar hem
+        # yazarken UnicodeEncodeError firlatabiliyor hem de baska makinede
+        # yazilmis dosya yanlis okunabiliyordu. append_log ile ayni kodlama.
+        return json.loads(LOG_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"{LOG_PATH} bozuk gorunuyor (gecersiz JSON): {exc}. "
@@ -196,7 +200,7 @@ def append_log(entry: dict) -> None:
     history = read_log()
     history.append(entry)
     tmp_path = LOG_PATH.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(history, ensure_ascii=False, indent=2))
+    tmp_path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(LOG_PATH)
 
 
@@ -227,6 +231,37 @@ def append_download_log(output_dir: Path, title: str, lines: list[str], totals: 
         f.write(block + "\n")
 
 
+def live_url(page) -> str:
+    """`page.url`, Playwright'in CDP navigasyon-OLAYLARINI dinleyerek
+    tuttugu, ONBELLEKLENMIS bir alan - bir METOD DEGIL, dogrudan bir
+    ozellik (property) okuma. Bu proje uzerinde CANLI DOGRULANAN bir
+    hata: Azure AD SSO'nun standart akisinda (Blackboard -> Microsoft'a
+    capraz-kaynak yonlendirme -> 2FA -> SAMLResponse ile Blackboard'a
+    POST-binding donus) bu onbellek ILK yonlendirmede TAKILI KALIP bir
+    daha hic guncellenmiyor - kullanici gozle Blackboard'un tam yuklu,
+    calisan bir sayfasina baksa BILE `page.url` SAATLERCE (oturum
+    boyunca) o ilk Microsoft giris URL'sini dondurmeye devam edebiliyor.
+    Gercek tarayicida navigasyon dogru ilerliyor, sadece Playwright'in
+    bu SEKME icin CDP navigasyon-takibi kopuyor (gercek Chrome +
+    launch_persistent_context + capraz-kaynak POST yonlendirme
+    kombinasyonuna ozgu, bilinen bir kategori sorun).
+
+    Bunun aksine `page.evaluate(...)` HER cagrida sayfanin KENDI canli
+    JS baglaminda (ayri bir CDP kanali - Runtime.evaluate) taze bir
+    sorgu yapar, bu yuzden `window.location.href` gercek durumu HER
+    ZAMAN doğru yansitir. Sayfa gecis halindeyken (execution context
+    yok edilmis olabilir) evaluate basarisiz olabilir - bu durumda
+    (hala yanlis olma ihtimaline ragmen) elimizdeki en iyi bilgi olan
+    onbellek degerine (.url) duseriz."""
+    try:
+        return page.evaluate("() => window.location.href")
+    except Exception:
+        try:
+            return page.url
+        except Exception:
+            return ""
+
+
 def resolve_active_page(context):
     """Context'teki acik sekmeler arasindan Blackboard'da olani bulur.
 
@@ -247,7 +282,7 @@ def resolve_active_page(context):
     last_reachable = None
     for candidate in context.pages:
         try:
-            url = candidate.url
+            url = live_url(candidate)
         except Exception:
             continue
         last_reachable = candidate
@@ -272,7 +307,7 @@ def find_blackboard_pages(context) -> list:
     matches = []
     for candidate in context.pages:
         try:
-            url = candidate.url
+            url = live_url(candidate)
         except Exception:
             continue
         if url.startswith(BASE_URL):
@@ -290,16 +325,23 @@ def wait_for_blackboard(page, attempts: int = 6, delay_ms: int = 500) -> bool:
     Blackboard'a gecmis oluyordu. Bu yuzden hemen "giris yapilmamis" diye
     hukmetmek yerine, sayfanin yerlesmesi icin kisa bir sure (varsayilan
     ~3 saniye) taniyoruz.
+
+    live_url() kullaniyor, ham page.url DEGIL: Azure AD SSO'nun capraz-
+    kaynak yonlendirme zincirinde page.url'in Playwright'in kendi ic
+    onbelleginde TAKILI KALDIGI (bkz. live_url docstring) CANLI OLARAK
+    DOGRULANDI - bu kontrol ham .url'e devam etseydi, kullanici gercekten
+    giris yapip Blackboard'a gecmis olsa BILE bu fonksiyon SÜREKLI False
+    donup "Bul ve Tara" hicbir zaman basarili olmazdi.
     """
     for _ in range(attempts):
         try:
-            if page.url.startswith(BASE_URL):
+            if live_url(page).startswith(BASE_URL):
                 return True
         except Exception:
             pass
         page.wait_for_timeout(delay_ms)
     try:
-        return page.url.startswith(BASE_URL)
+        return live_url(page).startswith(BASE_URL)
     except Exception:
         return False
 
@@ -403,6 +445,27 @@ def is_profile_lock_error(exc_or_message: BaseException | str) -> bool:
     return any(marker in message for marker in PROFILE_LOCK_ERROR_MARKERS)
 
 
+# Playwright, channel="chrome" istenip de makinede gercek Google Chrome
+# kurulu DEGILSE su kalipta bir hata veriyor:
+#   "Chromium distribution 'chrome' is not found at ..."
+#   "Run \"playwright install chrome\""
+# Bu, ozellikle Windows'ta (Chrome'un her makinede hazir gelmedigi tek
+# platform) ilk kurulumda en sik karsilasilacak hata - kullaniciya ham
+# Playwright mesaji yerine "Chrome'u kur" diyen net bir Turkce mesaj
+# gosterebilmek icin ayirt ediyoruz (bkz. gui.py browser_error isleme).
+CHROME_MISSING_ERROR_MARKERS = (
+    "distribution 'chrome' is not found",
+    "playwright install chrome",
+)
+
+
+def is_chrome_missing_error(exc_or_message: BaseException | str) -> bool:
+    """Tarayici-acma hatasinin, makinede Google Chrome kurulu olmamasindan
+    kaynaklanip kaynaklanmadigini tahmin eder."""
+    message = str(exc_or_message).lower()
+    return any(marker in message for marker in CHROME_MISSING_ERROR_MARKERS)
+
+
 def check_output_writable(output_dir: Path) -> str | None:
     """output_dir'e gercekten yazilabiliyor mu diye kucuk bir deneme yapar.
 
@@ -453,10 +516,23 @@ def browser_launch_kwargs() -> dict:
     bayraklarinin gizlenmesi bu riski azaltiyor. Kendi ayri profilimizi
     (PROFILE_DIR) kullandigimiz icin Chrome'un "varsayilan profili
     otomatiklestirme desteklenmiyor" kisitlamasina takilmiyoruz.
+
+    chromium_sandbox=True: Playwright, `chromium_sandbox` ACIKCA True
+    VERILMEDIKCE HER launch'a kendiliginden `--no-sandbox` ekliyor (bkz.
+    playwright'in kendi kaynagi, `_innerDefaultArgs`: "if
+    (options.chromiumSandbox !== true) chromeArguments.push('--no-sandbox')").
+    Bu satir eklenmeden once, program her tarayici acisinda FARKINDA
+    OLMADAN Chrome'un isletim sistemi duzeyindeki islem korumasini (OS
+    sandbox) TAMAMEN kapatiyordu - Chrome bunu ekranda acikca bir
+    "Desteklenmeyen komut satiri isareti" uyarisiyla bildiriyordu.
+    Otomasyon algilanmasini onlemek icin sakladigimiz `ignore_default_args`
+    ile karistirilmamali: o SADECE "Chrome otomatik test yazilimiyla
+    kontrol ediliyor" cubugunu gizliyor, sandbox'la ilgisi yok.
     """
     return {
         "channel": "chrome",
         "viewport": {"width": DEFAULT_WINDOW_WIDTH, "height": DEFAULT_WINDOW_HEIGHT},
+        "chromium_sandbox": True,
         "args": [
             f"--window-size={DEFAULT_WINDOW_WIDTH},{DEFAULT_WINDOW_HEIGHT}",
             "--window-position=0,0",
@@ -485,4 +561,4 @@ def has_seen_onboarding() -> bool:
 
 def mark_onboarding_seen() -> None:
     ONBOARDING_SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ONBOARDING_SEEN_PATH.write_text(now_stamp())
+    ONBOARDING_SEEN_PATH.write_text(now_stamp(), encoding="utf-8")

@@ -39,6 +39,7 @@ bir worker thread'de sirayla islenir; GUI ile aralarinda iki kuyruk var
 
 import queue
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -62,7 +63,9 @@ from common import (
     find_blackboard_pages,
     has_seen_onboarding,
     is_browser_closed_error,
+    is_chrome_missing_error,
     is_profile_lock_error,
+    live_url,
     mark_onboarding_seen,
     open_in_file_manager,
     resolve_active_page,
@@ -125,6 +128,17 @@ DEFAULT_MIN_HEIGHT = 720
 # kullanicinin istegi geregi bu boyut degistirilemez (resizable(False)).
 COMPACT_WINDOW_WIDTH = 320
 COMPACT_WINDOW_HEIGHT = 250
+
+# "pointinghand" SADECE macOS'ta (Aqua) taninan bir Tk imlec adi -
+# Windows/Linux'ta widget OLUSTURULURKEN cursor= parametresine verilirse
+# TclError firlatip uygulamayi daha acilista cokertiyordu. "hand2" ise
+# her uc platformda da gecerli, ayni "tiklanabilir el" imlecini verir.
+CURSOR_HAND = "hand2"
+
+# Canli islem logunun (sayfa gecislerinde/kompakt modda kaybolmamasi icin
+# bellekte tutulan) gecmisine bir ust sinir - cok uzun oturumlarda bellegin
+# sinirsiz buyumesini onler.
+LOG_HISTORY_MAX_LINES = 2000
 
 
 def _rounded_rect_points(x1: float, y1: float, x2: float, y2: float, radius: float) -> list[float]:
@@ -209,7 +223,7 @@ class RoundedButton(tk.Canvas):
             return
         self._hover = True
         try:
-            self.config(cursor="pointinghand")
+            self.config(cursor=CURSOR_HAND)
         except tk.TclError:
             pass
         self._draw()
@@ -471,9 +485,13 @@ def _page_still_on_blackboard(page) -> bool:
     """Devre kesici tetiklendiginde son bilinen sayfanin hala Blackboard
     domaininde olup olmadigina bakar - degilse (ör. login sayfasina geri
     dusulmusse) oturumun suresi dolmus olabilecegini kullaniciya
-    belirtmek icin kullanilir (bkz. cagiran yerdeki emit mesaji)."""
+    belirtmek icin kullanilir (bkz. cagiran yerdeki emit mesaji).
+
+    live_url() kullaniyor - bkz. common.py'deki docstring: ham page.url,
+    SSO'nun capraz-kaynak yonlendirme zincirinde eski bir URL'de takili
+    kalabiliyor."""
     try:
-        return page.url.startswith(BASE_URL)
+        return live_url(page).startswith(BASE_URL)
     except Exception:
         return False
 
@@ -559,6 +577,13 @@ class BlackboardGUI:
         self._timeline_stage = 0
         self._totals = {"ok": 0, "skip": 0, "fail": 0}
         self._compact_mode = False
+        # Canli islem logunun tam metni - log_text widget'i sayfa gecisinde
+        # yok edilip yeniden kuruldugu (ya da kompakt modda hic olmadigi)
+        # icin, mesajlar burada birikir ve Ana Sayfa her kuruldugunda
+        # yeniden yazilir. Onceden kullanici baska sayfadayken/kompakt
+        # moddayken gelen loglar SESSIZCE KAYBOLUYORDU.
+        self._log_history: list[str] = []
+        self._exiting = False
 
         self._configure_styles()
 
@@ -606,7 +631,103 @@ class BlackboardGUI:
         outer.inner = inner
         return outer
 
+    def _build_chrome_flag_notice(self, parent: tk.Widget, wraplength: int = 640) -> tk.Frame:
+        """Chrome'un acilista gosterdigi zararsiz "desteklenmeyen bayrak"
+        uyarisini (--disable-blink-features=AutomationControlled - SSO
+        otomasyon tespitini onlemek icin bilerek eklenen bayrak, bkz.
+        common.py::browser_launch_kwargs) aciklayan, kucuk, sari bir
+        bilgi bandi. Ana Sayfa ve Yardim sayfasinda ayni metni
+        tekrarlamamak icin tek yerden uretiliyor (onboarding'de artik
+        gosterilmiyor - Ana Sayfa'da kalici oldugu icin tekrar gerekmiyor).
+
+        wraplength cagirana gore ayarlanabilir.
+
+        Varsayilan olarak KAPALI (kucuk, sadece baslik) baslar - sayfada
+        surekli buyuk yer kaplamasin diye. Basliktaki ok simgesine
+        tiklaninca genisleyip aciklama + Chrome'un tam mesajini gosterir,
+        tekrar tiklaninca kucuk haline doner."""
+        card = tk.Frame(parent, bg=COLOR_WARNING_SOFT)
+        inner = tk.Frame(card, bg=COLOR_WARNING_SOFT)
+        inner.pack(fill="x", padx=14, pady=10)
+
+        header_row = tk.Frame(inner, bg=COLOR_WARNING_SOFT)
+        header_row.pack(fill="x")
+        tk.Label(
+            header_row, text="⚠  Beklenen Bir Tarayıcı Uyarısı", bg=COLOR_WARNING_SOFT,
+            fg=COLOR_WARNING, font=("", 13, "bold"), anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        toggle_label = tk.Label(
+            header_row, text="▾", bg=COLOR_WARNING_SOFT, fg=COLOR_WARNING,
+            font=("", 15, "bold"), cursor=CURSOR_HAND, padx=6,
+        )
+        toggle_label.pack(side="right")
+
+        body = tk.Frame(inner, bg=COLOR_WARNING_SOFT)
+        tk.Label(
+            body,
+            text="Chrome açılışta aşağıdaki uyarıyı gösterebilir. Üniversitenin "
+            "giriş sistemiyle (SSO) uyumluluk için bilerek kullanılan bir "
+            "ayardan kaynaklanır — kapatılamaz, programın işleyişini etkilemez.",
+            bg=COLOR_WARNING_SOFT, fg=COLOR_TEXT, font=("", 12), anchor="w",
+            justify="left", wraplength=wraplength,
+        ).pack(fill="x", pady=(4, 8))
+
+        quote_box = tk.Frame(body, bg=COLOR_CARD, highlightbackground=COLOR_WARNING, highlightthickness=1)
+        quote_box.pack(fill="x")
+        tk.Label(
+            quote_box,
+            text="\"Desteklenmeyen bir komut satırı işareti kullanıyorsunuz: "
+            "--disable-blink-features=AutomationControlled. Sağlamlık ve "
+            "güvenlik düzeyi düşecektir.\"",
+            bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 11), anchor="w",
+            justify="left", wraplength=wraplength - 20,
+        ).pack(fill="x", padx=10, pady=8)
+
+        # "Guvenlik zafiyeti yok" gibi mutlak bir iddia yerine NE
+        # YAPMADIGINI somut olarak belirtiyoruz - bu bayrak sadece
+        # sitelerin "otomasyonla mi kontrol ediliyorum" JS sinyalini
+        # gizliyor; sandbox/HTTPS/site izolasyonu gibi gercek koruma
+        # katmanlarina dokunmuyor. Chrome'un uyarisi HER desteklenmeyen
+        # bayrak icin gosterilen genel bir mesaj, bu bayraga ozel bir
+        # risk analizi degil.
+        tk.Label(
+            body,
+            text="Bu ayar yalnızca otomasyon tespit sinyalini gizler; sandbox, "
+            "HTTPS doğrulaması ve diğer güvenlik korumaları etkilenmez.",
+            bg=COLOR_WARNING_SOFT, fg=COLOR_MUTED, font=("", 11), anchor="w",
+            justify="left", wraplength=wraplength,
+        ).pack(fill="x", pady=(8, 0))
+
+        state = {"expanded": False}
+
+        def _apply_state() -> None:
+            if state["expanded"]:
+                body.pack(fill="x", pady=(8, 0))
+                toggle_label.config(text="▴")
+            else:
+                body.pack_forget()
+                toggle_label.config(text="▾")
+
+        def _toggle(_event=None) -> None:
+            state["expanded"] = not state["expanded"]
+            _apply_state()
+
+        toggle_label.bind("<Button-1>", _toggle)
+        _apply_state()
+        return card
+
     def _log(self, message: str) -> None:
+        """Mesaji kalici gecmise ekler ve (Ana Sayfa'daysak) log widget'ina
+        yazar. Ana Sayfa'da DEGILKEN cagirmak guvenli - mesaj kaybolmaz,
+        sayfa yeniden kuruldugunda gecmisten geri yazilir."""
+        self._log_history.append(message)
+        if len(self._log_history) > LOG_HISTORY_MAX_LINES:
+            self._log_history = self._log_history[-LOG_HISTORY_MAX_LINES:]
+        if not self._on_home_page():
+            return
+        self._append_log_line(message)
+
+    def _append_log_line(self, message: str) -> None:
         tag = None
         if "  OK" in message or message.startswith("OK"):
             tag = "ok"
@@ -710,11 +831,91 @@ class BlackboardGUI:
                 font=("", 13), anchor="w", justify="left", wraplength=240,
             ).pack(fill="x")
 
+        # Chrome bayrak uyarisi burada YOK artik - Ana Sayfa'da zaten
+        # kalici olarak gosteriliyor, onboarding'de tekrarlamaya gerek yok.
+
         # ---- Sag: adim adim akis ----
+        # Kucuk ekranlarda / pencere kuculdugunde (ör. bu bant eklenince
+        # oldugu gibi) icerik pencere yuksekligini asabiliyordu - sabit bir
+        # Frame ile bu durumda "Başla" butonu dahil alttaki her sey
+        # KIRPILIP goruntu disina cikiyordu, kullanici onboarding'i
+        # gecemeyebilirdi. Iki katmanli bir yapi kuruyoruz: "Başla" +
+        # "Bir daha gösterme" satiri ALTA SABIT kalir (her zaman gorunur),
+        # ustundeki bilgilendirici icerik (adimlar, notlar) ise Canvas +
+        # Scrollbar ile DIKEY olarak kaydirilabilir - icerik ne kadar uzun
+        # olursa olsun ana eylem butonuna ulasmak icin kaydirmaya bile
+        # gerek kalmaz.
         right = tk.Frame(outer, bg=COLOR_BG)
         right.pack(side="left", fill="both", expand=True)
-        right_body = tk.Frame(right, bg=COLOR_BG)
-        right_body.pack(fill="both", expand=True, padx=40, pady=36)
+
+        footer = tk.Frame(right, bg=COLOR_BG)
+        footer.pack(side="bottom", fill="x", padx=40, pady=(12, 28))
+        tk.Checkbutton(
+            footer, text="Bir daha gösterme", variable=self._dont_show_again_var,
+            bg=COLOR_BG, fg=COLOR_MUTED, activebackground=COLOR_BG,
+            selectcolor=COLOR_BG, font=("", 13), highlightthickness=0, bd=0,
+        ).pack(side="left")
+        RoundedButton(
+            footer, text="Başla →", command=self._finish_onboarding, kind="primary", width=150,
+        ).pack(side="right")
+        tk.Frame(right, bg=COLOR_BORDER, height=1).pack(side="bottom", fill="x")
+
+        scroll_wrap = tk.Frame(right, bg=COLOR_BG)
+        scroll_wrap.pack(side="top", fill="both", expand=True)
+
+        right_canvas = tk.Canvas(scroll_wrap, bg=COLOR_BG, highlightthickness=0)
+        right_scrollbar = ttk.Scrollbar(scroll_wrap, orient="vertical", command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_scrollbar.set)
+        right_canvas.pack(side="left", fill="both", expand=True)
+        right_scrollbar.pack(side="right", fill="y")
+
+        right_body = tk.Frame(right_canvas, bg=COLOR_BG)
+        right_body_padded = tk.Frame(right_body, bg=COLOR_BG)
+        right_body_padded.pack(fill="both", expand=True, padx=40, pady=(36, 12))
+        right_window = right_canvas.create_window((0, 0), window=right_body, anchor="nw")
+
+        def _sync_scrollregion(_event=None) -> None:
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+
+        def _sync_body_width(event) -> None:
+            # right_body'yi HER ZAMAN canvas'in guncel genisligine esitle -
+            # aksi halde metinler kendi wraplength'lerine gore dar kalir ve
+            # gereksiz yatay bosluk/kaydirma olusur.
+            right_canvas.itemconfig(right_window, width=event.width)
+
+        right_body.bind("<Configure>", _sync_scrollregion)
+        right_canvas.bind("<Configure>", _sync_body_width)
+
+        def _on_mousewheel(event) -> None:
+            try:
+                if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+                    right_canvas.yview_scroll(1, "units")
+                elif getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+                    right_canvas.yview_scroll(-1, "units")
+            except tk.TclError:
+                # Onboarding zaten kapanip canvas yok edilmisken gecikmeli
+                # bir tekerlek olayi gelirse sessizce yok say.
+                pass
+
+        def _bind_mousewheel(_event=None) -> None:
+            right_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            right_canvas.bind_all("<Button-4>", _on_mousewheel)
+            right_canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_mousewheel(_event=None) -> None:
+            right_canvas.unbind_all("<MouseWheel>")
+            right_canvas.unbind_all("<Button-4>")
+            right_canvas.unbind_all("<Button-5>")
+
+        # Fare tekerlegi SADECE imlec bu alanin uzerindeyken dinlensin -
+        # bind_all() kalici olarak birakilirsa, onboarding kapandiktan
+        # sonra (canvas yok edildikten sonra) gelecek bir tekerlek olayi
+        # yok edilmis widget'a erismeye calisip TclError firlatirdi.
+        right_canvas.bind("<Enter>", _bind_mousewheel)
+        right_canvas.bind("<Leave>", _unbind_mousewheel)
+        self._onboarding_unbind_mousewheel = _unbind_mousewheel
+
+        right_body = right_body_padded
 
         tk.Label(
             right_body, text="Başlamadan Önce", bg=COLOR_BG, fg=COLOR_TEXT,
@@ -775,20 +976,18 @@ class BlackboardGUI:
             "bilgilerinize erişmez, kaydetmez.",
             bg=COLOR_ACCENT_SOFT, fg=COLOR_TEXT, font=("", 13), anchor="w",
             justify="left", wraplength=560,
-        ).pack(fill="x", pady=(4, 0))
-
-        footer = tk.Frame(right_body, bg=COLOR_BG)
-        footer.pack(fill="x")
-        tk.Checkbutton(
-            footer, text="Bir daha gösterme", variable=self._dont_show_again_var,
-            bg=COLOR_BG, fg=COLOR_MUTED, activebackground=COLOR_BG,
-            selectcolor=COLOR_BG, font=("", 13), highlightthickness=0, bd=0,
-        ).pack(side="left")
-        RoundedButton(
-            footer, text="Başla →", command=self._finish_onboarding, kind="primary", width=150,
-        ).pack(side="right")
+        ).pack(fill="x", pady=(4, 16))
 
     def _finish_onboarding(self) -> None:
+        # bind_all() ile SADECE fare onboarding canvas'inin uzerindeyken
+        # aktif edilen tekerlek dinleyicisini burada da kesin olarak
+        # kaldiriyoruz - "Başla" tiklandiginda imlec hala canvas
+        # uzerindeyse <Leave> hic tetiklenmeden widget'lar yok edilir,
+        # bu da kalici bir global bind birakirdi (bkz. kurulum yerindeki
+        # docstring).
+        unbind = getattr(self, "_onboarding_unbind_mousewheel", None)
+        if unbind is not None:
+            unbind()
         if self._dont_show_again_var.get():
             mark_onboarding_seen()
         self._build_app_shell()
@@ -832,11 +1031,11 @@ class BlackboardGUI:
         nav_col = tk.Frame(sidebar, bg=COLOR_SIDEBAR_BG)
         nav_col.pack(fill="x", padx=12)
         for key, icon, label in NAV_ITEMS:
-            row = tk.Frame(nav_col, bg=COLOR_SIDEBAR_BG, cursor="pointinghand")
+            row = tk.Frame(nav_col, bg=COLOR_SIDEBAR_BG, cursor=CURSOR_HAND)
             row.pack(fill="x", pady=2)
             text_label = tk.Label(
                 row, text=f"{icon}   {label}", bg=COLOR_SIDEBAR_BG, fg=COLOR_MUTED,
-                font=FONT_NAV_ITEM, anchor="w", cursor="pointinghand",
+                font=FONT_NAV_ITEM, anchor="w", cursor=CURSOR_HAND,
             )
             text_label.pack(fill="x", padx=10, pady=8)
             for widget in (row, text_label):
@@ -949,6 +1148,8 @@ class BlackboardGUI:
             badge_col, text="🗗 Küçült", command=self._enter_compact_mode, kind="secondary", width=110,
         ).pack(side="left", padx=(8, 0))
 
+        self._build_chrome_flag_notice(main_col).pack(fill="x", pady=(12, 0))
+
         # --- Istatistik kartlari ---
         stats_row = tk.Frame(main_col, bg=COLOR_BG)
         stats_row.pack(fill="x", pady=(20, 0))
@@ -1020,6 +1221,9 @@ class BlackboardGUI:
         self.log_text.tag_configure("warn", foreground=COLOR_WARNING, font=("", 12, "bold"))
         self.log_text.tag_configure("skip", foreground=COLOR_MUTED)
         self.log_text.pack(fill="both", expand=True)
+        # Sayfa gecisleri/kompakt mod sirasinda biriken log gecmisini geri yaz.
+        for line in self._log_history:
+            self._append_log_line(line)
 
         # --- Sag panel: sistem durumu / son kesif / hizli islemler ---
         self._build_system_status_card(side_col)
@@ -1140,11 +1344,11 @@ class BlackboardGUI:
             ("📄  Log Dosyasını Aç", self._open_download_log),
         ]
         for text, command in actions:
-            row = tk.Frame(card.inner, bg=COLOR_CARD, cursor="pointinghand")
+            row = tk.Frame(card.inner, bg=COLOR_CARD, cursor=CURSOR_HAND)
             row.pack(fill="x", pady=2)
             lbl = tk.Label(
                 row, text=text, bg=COLOR_CARD, fg=COLOR_TEXT, font=("", 12),
-                anchor="w", cursor="pointinghand",
+                anchor="w", cursor=CURSOR_HAND,
             )
             lbl.pack(fill="x", padx=6, pady=6)
             for widget in (row, lbl):
@@ -1172,6 +1376,7 @@ class BlackboardGUI:
         self._refresh_discovery_panel()
 
     def _clear_log(self) -> None:
+        self._log_history = []
         self.log_text.delete("1.0", "end")
 
     # ---------- Kompakt (kucultulmus, her zaman en onde) mod ----------
@@ -1357,22 +1562,28 @@ class BlackboardGUI:
         except OSError:
             return
         for entry in entries:
-            if entry.is_dir():
-                item_count = sum(1 for p in entry.iterdir() if not p.name.startswith("."))
-                item = tree.insert(
-                    parent_item, "end", text=f"📁  {entry.name}",
-                    values=(f"{item_count} öğe",), open=(parent_item == ""),
-                )
-                self._tree_paths[item] = entry
-                self._populate_tree_node(tree, item, entry)
-            else:
-                size_kb = entry.stat().st_size / 1024
-                icon = "📄" if entry.suffix.lower() == ".pdf" else "📝"
-                item = tree.insert(
-                    parent_item, "end", text=f"{icon}  {entry.name}",
-                    values=(f"{size_kb:.0f} KB",),
-                )
-                self._tree_paths[item] = entry
+            # Tek bir okunamayan alt klasor/dosya (izin sorunu, senkron
+            # sirasinda kilitli OneDrive dosyasi vb.) tum agacin insasini
+            # cokertmesin - o girdi atlanir, kalanlar listelenmeye devam eder.
+            try:
+                if entry.is_dir():
+                    item_count = sum(1 for p in entry.iterdir() if not p.name.startswith("."))
+                    item = tree.insert(
+                        parent_item, "end", text=f"📁  {entry.name}",
+                        values=(f"{item_count} öğe",), open=(parent_item == ""),
+                    )
+                    self._tree_paths[item] = entry
+                    self._populate_tree_node(tree, item, entry)
+                else:
+                    size_kb = entry.stat().st_size / 1024
+                    icon = "📄" if entry.suffix.lower() == ".pdf" else "📝"
+                    item = tree.insert(
+                        parent_item, "end", text=f"{icon}  {entry.name}",
+                        values=(f"{size_kb:.0f} KB",),
+                    )
+                    self._tree_paths[item] = entry
+            except OSError:
+                continue
 
     def _on_download_tree_double_click(self, _event=None) -> None:
         tree = self.download_tree
@@ -1523,6 +1734,8 @@ class BlackboardGUI:
                 font=("", 11, "bold"), padx=8, pady=3,
             ).pack(anchor="w")
 
+        self._build_chrome_flag_notice(wrapper).pack(fill="x", pady=(4, 0))
+
     # ---------- worker thread: TUM Playwright islemleri burada ----------
 
     def _worker_loop(self) -> None:
@@ -1540,88 +1753,231 @@ class BlackboardGUI:
                     # sayfanin URL'sine erisim gecici hata firlatabiliyor -
                     # bu, YAKALANMAZSA butun worker thread'ini cokertip
                     # her seyi donduruyordu. Butun blok korumali.
-                    try:
-                        if context is not None:
-                            active = resolve_active_page(context)
-                            if active is not None:
-                                self.gui_queue.put(("tracked_url", active.url))
-                    except Exception:
-                        pass
+                    #
+                    # ONEMLI: bu ayni zamanda kullanicinin Chrome penceresini
+                    # DOGRUDAN (uygulamanin "Guvenli Cikis"i disinda, ör.
+                    # kirmizi X'e basarak) kapatip kapatmadigini tespit eden
+                    # TEK yer - eskiden bu SADECE aktif bir tarama sirasinda
+                    # (capture_current_page bir hata firlattiginda)
+                    # yakalaniyordu. Kullanici bos beklerken (hicbir tarama
+                    # yokken) pencereyi kapatirsa hicbir kod yolu bunu fark
+                    # ETMIYORDU - GUI sonsuza kadar "bağlı" gostermeye devam
+                    # ediyordu, ta ki kullanici "Bul ve Tara"ya basip
+                    # anlasilmaz bir hatayla karsilasana kadar. Simdi HER
+                    # bos-dongu turunda baglantiyi da dogruluyoruz: TUM
+                    # pencereler kapandiysa (context.pages bos) ya da
+                    # tarayici surecine erisim "kapandi" turu bir hata
+                    # firlatiyorsa, hemen "browser_lost" gonderip context'i
+                    # sifirliyoruz ki kullanici tekrar "Tarayıcıyı Aç"a
+                    # basabilsin.
+                    if context is not None:
+                        browser_gone = False
+                        try:
+                            pages = context.pages
+                            if not pages:
+                                # Kalici profilde son pencere de kapandiginda
+                                # Chrome sureci de sonlaniyor (arka planda
+                                # calismaya devam etmesini saglayan ozel bir
+                                # bayrak vermiyoruz) - bu yuzden bos sekme
+                                # listesi de kapanmanin guvenilir bir isareti.
+                                browser_gone = True
+                            else:
+                                active = resolve_active_page(context)
+                                if active is not None:
+                                    self.gui_queue.put(("tracked_url", live_url(active)))
+                        except Exception as exc:
+                            if is_browser_closed_error(exc):
+                                browser_gone = True
+                        if browser_gone:
+                            context = None
+                            page = None
+                            self.gui_queue.put(("browser_lost", None))
                     continue
 
-                if command == "quit":
-                    break
+                # TUM komut isleme bloklarini (asagida) tek bir genel
+                # guvenlik agiyla sariyoruz: bu worker thread, uygulamanin
+                # TEK Playwright thread'i - Playwright'in senkron API'si
+                # tek thread'den kullanilmak ZORUNDA (bkz. modul basindaki
+                # docstring). Yukarida bircok spesifik hata durumu tek tek
+                # ele alinmis olsa da, tahmin edilememis herhangi bir
+                # istisna (ör. Playwright'in kendi ic hata turlerinden biri)
+                # BURADA yakalanmazsa bu thread SESSIZCE olur, GUI donuk
+                # kalir ama COKMEZ - kullanici hicbir dugmenin bir daha
+                # ISE YARAMADIGINI fark eder ama NEDENINI asla goremez.
+                # Bu yuzden son bir savunma hatti olarak butun komut
+                # islemeyi try/except ile sarip, beklenmedik bir hata
+                # olursa GUI'ye ACIKCA bildirip dongunun devam etmesini
+                # sagliyoruz.
+                try:
+                    if command == "quit":
+                        break
 
-                elif command == "open_browser":
-                    try:
-                        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                        # Onceki bir zorla-kapatma sonrasi yetim kalmis
-                        # kilit dosyalari varsa (baska bir surec KULLANMIYORSA
-                        # kayipsiz) temizlemeyi dene - bkz. fonksiyon docstring'i.
-                        clear_stale_profile_lock(PROFILE_DIR)
-                        context = p.chromium.launch_persistent_context(
-                            str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-                        )
-                        page = context.pages[0] if context.pages else context.new_page()
-                        page.goto(BASE_URL)
+                    elif command == "open_browser":
+                        try:
+                            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                            # Onceki bir zorla-kapatma sonrasi yetim kalmis
+                            # kilit dosyalari varsa (baska bir surec KULLANMIYORSA
+                            # kayipsiz) temizlemeyi dene - bkz. fonksiyon docstring'i.
+                            clear_stale_profile_lock(PROFILE_DIR)
+                            context = p.chromium.launch_persistent_context(
+                                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+                            )
+                        except Exception as exc:
+                            # Baslatma basarisizsa yarim bir context kalmasin -
+                            # aksi halde bos-zaman URL dongusu olu context'e
+                            # erismeye calisir, sonraki denemeler de kafa karistirir.
+                            context = None
+                            self.gui_queue.put(("browser_error", str(exc)))
+                            continue
+                        # Baslangic sayfasina gitme, tarayici ACMANIN basarisindan
+                        # ayri tutuluyor: internet yoksa/DNS cozulmuyorsa goto
+                        # basarisiz olur ama Chrome PENCERESI acilmistir. Onceden
+                        # bu durum "tarayici acilamadi" sayilip baglanti durumu
+                        # sifirlaniyordu; kullanici tekrar "Tarayıcıyı Aç"a basinca
+                        # da acik kalan pencere yuzunden profil kilidi hatasi
+                        # aliyordu. Simdi pencere acildiysa "bagli" sayiyoruz -
+                        # kullanici gerekirse adres cubugundan kendisi gidebilir.
+                        try:
+                            page = context.pages[0] if context.pages else context.new_page()
+                            page.goto(BASE_URL)
+                        except Exception as exc:
+                            self.gui_queue.put((
+                                "log",
+                                f"Tarayıcı açıldı ama Blackboard sayfası yüklenemedi ({exc}).\n"
+                                "İnternet bağlantını kontrol et; tarayıcıdaki adres çubuğundan "
+                                "Blackboard'a kendin de gidebilirsin.",
+                            ))
                         self.gui_queue.put(("browser_ready", None))
-                    except Exception as exc:
-                        self.gui_queue.put(("browser_error", str(exc)))
 
-                elif command == "discover":
-                    try:
-                        active_page = resolve_active_page(context) or page
-                    except Exception:
-                        active_page = page
+                    elif command == "discover":
+                        try:
+                            active_page = resolve_active_page(context) or page
+                        except Exception:
+                            active_page = page
 
-                    # Birden fazla Blackboard sekmesi aciksa, hangisinin
-                    # taranacagi belirsiz - sessizce ilkini secmek yerine
-                    # kullaniciyi acikca uyarip taramayi baslatmiyoruz
-                    # (bkz. find_blackboard_pages docstring).
-                    try:
-                        open_bb_tabs = find_blackboard_pages(context) if context else []
-                    except Exception:
-                        open_bb_tabs = []
-                    if len(open_bb_tabs) > 1:
-                        self.gui_queue.put((
-                            "log",
-                            f"{len(open_bb_tabs)} tane Blackboard sekmesi açık görünüyor, "
-                            "hangisinin taranacağı belirsiz olabilir. Gereksiz sekmeleri "
-                            "kapatıp (sadece taramak istediğin sayfa açık kalsın) tekrar "
-                            "'Bul ve Tara'ya bas.",
-                        ))
-                        self.gui_queue.put(("discovery_failed", None))
-                    else:
-                        self._discover(active_page, payload)
+                        # active_page None kalabilir: kullanici tarayiciyi hic
+                        # acmadan ya da bos beklerken kapattiktan sonra GUI
+                        # dugmeleri her nasilsa hala etkin kaldiysa (savunma
+                        # amacli - normalde artik "browser_lost" mesaji
+                        # dugmeleri devre disi birakiyor). None ile
+                        # _discover'a devam etmek page.wait_for_timeout gibi
+                        # cagrilarda AttributeError firlatip TUM worker
+                        # thread'ini (arka planda calisan TEK Playwright
+                        # thread'ini) sessizce cokertip uygulamayi kalici
+                        # olarak tepkisiz birakirdi - burada erken, net bir
+                        # mesajla durmak cok daha guvenli.
+                        if active_page is None:
+                            self.gui_queue.put((
+                                "log",
+                                "Tarayıcı bağlantısı yok görünüyor - önce "
+                                "'Tarayıcıyı Aç'a bas.",
+                            ))
+                            self.gui_queue.put(("discovery_failed", None))
+                            continue
 
-                elif command == "download":
-                    try:
-                        active_page = resolve_active_page(context) or page
-                    except Exception:
-                        active_page = page
-                    self._start_download(active_page, payload)
-
-                elif command == "check_url":
-                    # Manuel kontrol: acik TUM sekmeleri tek tek listele,
-                    # arka plandaki gorunmez zamanlayiciya guvenmeden anlik
-                    # ve tam gorunurluk sagla.
-                    try:
-                        pages = context.pages if context is not None else []
-                        self.gui_queue.put(("log", f"Açık sekme sayısı: {len(pages)}"))
-                        for i, pg in enumerate(pages):
+                        # Birden fazla Blackboard sekmesi aciksa, hangisinin
+                        # taranacagi belirsiz - sessizce ilkini secmek yerine
+                        # kullaniciyi acikca uyarip taramayi baslatmiyoruz
+                        # (bkz. find_blackboard_pages docstring).
+                        try:
+                            open_bb_tabs = find_blackboard_pages(context) if context else []
+                        except Exception:
+                            open_bb_tabs = []
+                        if len(open_bb_tabs) > 1:
+                            self.gui_queue.put((
+                                "log",
+                                f"{len(open_bb_tabs)} tane Blackboard sekmesi açık görünüyor, "
+                                "hangisinin taranacağı belirsiz olabilir. Gereksiz sekmeleri "
+                                "kapatıp (sadece taramak istediğin sayfa açık kalsın) tekrar "
+                                "'Bul ve Tara'ya bas.",
+                            ))
+                            self.gui_queue.put(("discovery_failed", None))
+                        else:
                             try:
-                                pg_url = pg.url
+                                self._discover(active_page, payload)
                             except Exception as exc:
-                                pg_url = f"(okunamadı: {exc})"
-                            self.gui_queue.put(("log", f"  Sekme {i + 1}: {pg_url}"))
-                        active = resolve_active_page(context) if context is not None else None
-                        if active is not None:
-                            self.gui_queue.put(("tracked_url", active.url))
-                    except Exception as exc:
-                        self.gui_queue.put(("log", f"Kontrol sırasında hata: {exc}"))
+                                # ör. wait_for_blackboard'un ic dongusundeki
+                                # page.wait_for_timeout - kullanici tam da
+                                # "Bul ve Tara" taramanin GIRIS KONTROLU
+                                # sirasinda (~3 saniyelik bekleme penceresi)
+                                # tarayiciyi kapatirsa buraya duser. Genel
+                                # "beklenmedik hata" mesaji yerine ozel
+                                # olarak yakalayip GUI'nin baglanti
+                                # durumunu da (dugmeler dahil) temiz sekilde
+                                # sifirliyoruz.
+                                if is_browser_closed_error(exc):
+                                    context = None
+                                    page = None
+                                    self.gui_queue.put(("browser_lost", None))
+                                else:
+                                    raise
+
+                    elif command == "download":
+                        try:
+                            active_page = resolve_active_page(context) or page
+                        except Exception:
+                            active_page = page
+                        # bkz. "discover" kolundaki ayni kontrolun docstring'i -
+                        # None page ile devam etmek yerine, her ogede tek tek
+                        # basarisiz olup kafa karistirici "NoneType" hatalari
+                        # biriktirmek yerine hemen net bir mesajla duruyoruz.
+                        if active_page is None:
+                            self.gui_queue.put((
+                                "log",
+                                "Tarayıcı bağlantısı yok görünüyor - önce "
+                                "'Tarayıcıyı Aç'a bas.",
+                            ))
+                            self.gui_queue.put(("scan_done", {"ok": 0, "skip": 0, "fail": 0}))
+                            continue
+                        self._start_download(active_page, payload)
+
+                    elif command == "check_url":
+                        # Manuel kontrol: acik TUM sekmeleri tek tek listele,
+                        # arka plandaki gorunmez zamanlayiciya guvenmeden anlik
+                        # ve tam gorunurluk sagla.
+                        try:
+                            pages = context.pages if context is not None else []
+                            self.gui_queue.put(("log", f"Açık sekme sayısı: {len(pages)}"))
+                            for i, pg in enumerate(pages):
+                                try:
+                                    pg_url = live_url(pg)
+                                except Exception as exc:
+                                    pg_url = f"(okunamadı: {exc})"
+                                # Playwright'in onbellekledigi .url ile sayfanin CANLI
+                                # window.location.href'i ayriliyorsa (bkz. live_url
+                                # docstring - SSO capraz-kaynak yonlendirmesinde
+                                # gorulen bilinen kopma) bunu ACIKCA gosteriyoruz -
+                                # hem kullaniciya hem ileride hata ayiklarken faydali.
+                                try:
+                                    cached_url = pg.url
+                                except Exception:
+                                    cached_url = pg_url
+                                line = f"  Sekme {i + 1}: {pg_url}"
+                                if cached_url != pg_url:
+                                    line += f"\n    (Playwright onbellegi eski goruyor: {cached_url})"
+                                self.gui_queue.put(("log", line))
+                            active = resolve_active_page(context) if context is not None else None
+                            if active is not None:
+                                self.gui_queue.put(("tracked_url", live_url(active)))
+                        except Exception as exc:
+                            self.gui_queue.put(("log", f"Kontrol sırasında hata: {exc}"))
+                except Exception as exc:
+                    self.gui_queue.put((
+                        "log",
+                        f"Beklenmedik bir iç hata oluştu: {exc}\n"
+                        "Bu tek seferlik olabilir, kaldığın yerden devam "
+                        "edebilirsin - sorun sürerse 'Tarayıcıyı Aç'a tekrar "
+                        "basmayı dene.",
+                    ))
 
             if context is not None:
-                context.close()
+                try:
+                    context.close()
+                except Exception:
+                    # Tarayici kullanici tarafindan zaten kapatilmis olabilir -
+                    # cikis sirasinda bunun icin gurultulu bir traceback basmaya
+                    # gerek yok, worker thread temiz sekilde sonlansin.
+                    pass
 
     def _discover(self, page: Page, output_dir: Path) -> None:
         """Sadece sayfayi tarayip NE bulundugunu bildirir - henuz indirmez.
@@ -1634,7 +1990,7 @@ class BlackboardGUI:
             self.gui_queue.put((
                 "log",
                 "Şu anda Blackboard sayfasında değilsin (birkaç saniye "
-                f"boyunca kontrol edildi). Şu an: {page.url}\n"
+                f"boyunca kontrol edildi). Şu an: {live_url(page)}\n"
                 "Tarayıcıda önce Blackboard'a gerçekten giriş yaptığından "
                 "emin ol, sonra tekrar dene.",
             ))
@@ -1741,7 +2097,10 @@ class BlackboardGUI:
                 return False
 
         emit(f"Ders: {course_label}")
-        grades_url = page.url
+        # live_url: bu deger sonradan return_to_grades_list icinde
+        # KURTARMA navigasyonu icin kullaniliyor - yanlis/eski bir URL
+        # burada donarsa tum tarama yanlis sayfaya geri donmeye calisir.
+        grades_url = live_url(page)
         totals = {"ok": 0, "skip": 0, "fail": 0}
         consecutive_failures = 0
         for index, row_name in enumerate(exam_names):
@@ -1938,6 +2297,14 @@ class BlackboardGUI:
                     "Tarayıcı açılamadı. Program zaten başka bir pencerede "
                     "açık olabilir — diğer pencereyi (varsa) kapatıp tekrar dene.",
                 )
+            elif payload and is_chrome_missing_error(payload):
+                messagebox.showerror(
+                    "Google Chrome bulunamadı",
+                    "Bu program gerçek Google Chrome tarayıcısını kullanıyor "
+                    "ama bilgisayarda kurulu görünmüyor.\n\n"
+                    "Şu adresten Chrome'u kurup programı tekrar başlat:\n"
+                    "https://www.google.com/chrome/",
+                )
             else:
                 messagebox.showerror("Hata", f"Tarayıcı açılamadı: {payload}")
         elif kind == "tracked_url":
@@ -1945,8 +2312,7 @@ class BlackboardGUI:
             if self._on_home_page():
                 self._refresh_system_status()
         elif kind == "log":
-            if self._on_home_page():
-                self._log(payload)
+            self._log(payload)
         elif kind == "progress":
             totals = payload["totals"]
             self._totals = totals
@@ -1971,8 +2337,8 @@ class BlackboardGUI:
             self._download_enabled = True
             self._timeline_stage = 2
             count = len(payload["items"])
+            self._log(f"Hazır: {count} öğe bulundu. İndirmek için 'PDF Olarak İndir'e bas.\n")
             if self._on_home_page():
-                self._log(f"Hazır: {count} öğe bulundu. İndirmek için 'PDF Olarak İndir'e bas.\n")
                 self.progress_bar.set_progress(0.0)
                 self.progress_percent_label.config(text="0%")
                 self.progress_count_label.config(text=f"0 / {count} öğe")
@@ -1993,17 +2359,32 @@ class BlackboardGUI:
                 self.download_button.config(state="disabled")
                 self._refresh_discovery_panel()
         elif kind == "browser_lost":
-            # Tarama sirasinda tarayici/sekme kapanmis/coktu (bkz.
-            # is_browser_closed_error) - baglanti durumunu sifirlayip
-            # kullanicinin tekrar "Tarayıcıyı Aç"a basmasini bekliyoruz.
+            # Tarayici/sekme kapanmis/coktu - ya aktif bir tarama sirasinda
+            # (bkz. is_browser_closed_error) ya da kullanici bos beklerken
+            # dogrudan Chrome penceresini kapattigi icin (bkz. worker
+            # dongusundeki bos-zaman kontrolu). Baglanti durumunu
+            # sifirlayip kullanicinin tekrar "Tarayıcıyı Aç"a basmasini
+            # bekliyoruz.
+            #
+            # ONEMLI: sadece _scan_enabled/_download_enabled BAYRAKLARINI
+            # degil, dugmelerin GORSEL durumunu da devre disi birakiyoruz.
+            # Aksi halde (ör. tarayici bos beklerken kapatildiginda) "Bul
+            # ve Tara" TIKLANABILIR kalirdi - tiklanirsa worker'a context/
+            # page=None ile bir komut giderdi, bu da worker thread'ini
+            # (arka planda calisan TEK Playwright thread'i) sessizce
+            # cokertip butun uygulamayi kalici olarak tepkisiz birakabilirdi.
             self._connection_state = "disconnected"
             self._scan_enabled = False
             self._download_enabled = False
+            self._pending_discovery = None
             if self._on_home_page():
                 self.status_dot.set_state("disconnected")
                 self.status_text.config(text="bağlı değil")
                 self.open_browser_button.config(state="normal")
+                self.scan_button.config(state="disabled")
+                self.download_button.config(state="disabled")
                 self._refresh_system_status()
+                self._refresh_discovery_panel()
             self._apply_compact_tracked_state()
         elif kind == "scan_done":
             totals = payload or {"ok": 0, "skip": 0, "fail": 0}
@@ -2011,8 +2392,8 @@ class BlackboardGUI:
             self._timeline_stage = 4
             self._pending_discovery = None
             self._download_enabled = False
+            self._log("--- indirme bitti ---\n")
             if self._on_home_page():
-                self._log("--- indirme bitti ---\n")
                 self.progress_bar.set_progress(1.0)
                 self.progress_percent_label.config(text="100%")
                 self.stat_cards["ok"].set_value(totals["ok"])
@@ -2089,7 +2470,7 @@ class BlackboardGUI:
             self.output_dir = Path(chosen)
             self.output_dir_var.set(str(self.output_dir))
             warning = cloud_sync_warning(self.output_dir)
-            if warning and self._on_home_page():
+            if warning:
                 self._log(warning)
             self._update_last_download_label()
 
@@ -2120,6 +2501,14 @@ class BlackboardGUI:
         bildiriyoruz (bkz. _scan_not_defteri / _scan_grade_center), bu
         sayede worker thread mevcut ogeyi bitirip TEMIZ sekilde donuyor.
         """
+        # Pencere kapatma (X) + Guvenli Cikis butonu ayni yola dusuyor;
+        # bekleme sirasinda olay dongusu calismaya devam ettigi icin
+        # (asagidaki update() cagrilari) ikinci bir tiklama/kapatma denemesi
+        # bu fonksiyona YENIDEN girebilirdi - tek seferlik kilit.
+        if self._exiting:
+            return
+        self._exiting = True
+
         exit_button = getattr(self, "safe_exit_button", None)
         if exit_button is not None:
             exit_button.config(state="disabled", text="Kapatılıyor...")
@@ -2127,7 +2516,20 @@ class BlackboardGUI:
 
         self._stop_event.set()
         self.command_queue.put(("quit", None))
-        self.worker_thread.join(timeout=SAFE_EXIT_JOIN_TIMEOUT_S)
+        # Tek parca uzun bir join() GUI thread'ini bloke edip pencereyi
+        # donduruyordu - Windows bunu ~5 saniyede "Yanıt Vermiyor" olarak
+        # isaretleyip kullaniciyi zorla kapatmaya yonlendiriyor (zorla
+        # kapatma da tam olarak kacinmaya calistigimiz kirli cikis). Kisa
+        # join adimlari arasinda olay dongusunu pompalayarak pencereyi
+        # canli tutuyoruz.
+        deadline = time.monotonic() + SAFE_EXIT_JOIN_TIMEOUT_S
+        while self.worker_thread.is_alive() and time.monotonic() < deadline:
+            self.worker_thread.join(timeout=0.1)
+            try:
+                self.root.update()
+            except tk.TclError:
+                # Pencere bu arada yok edildiyse beklemeye sessizce devam et.
+                pass
 
         if self.worker_thread.is_alive():
             force = messagebox.askyesno(
@@ -2139,6 +2541,7 @@ class BlackboardGUI:
             )
             if not force:
                 self._stop_event.clear()
+                self._exiting = False
                 if exit_button is not None:
                     exit_button.config(state="normal", text="Güvenli Çıkış")
                 return

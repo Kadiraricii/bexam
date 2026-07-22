@@ -5,13 +5,14 @@ setlocal enabledelayedexpansion
 rem Blackboard Sinav PDF Yakalayici - Kurulum (Windows)
 rem
 rem Bu script:
-rem   1) python'un kurulu oldugunu dogrular,
+rem   1) python'un kurulu ve 3.10+ oldugunu dogrular,
 rem   2) .venv sanal ortamini olusturur (yoksa),
 rem   3) requirements.txt'teki bagimliliklari kurar,
-rem   4) Playwright'in kendi tarayici bilesenlerini kurar,
-rem   5) GERCEK Google Chrome'un kurulu olup olmadigini kontrol eder
+rem   4) GERCEK Google Chrome'un kurulu olup olmadigini kontrol eder
 rem      (program channel="chrome" ile Playwright'in kendi tarayicisi
-rem      degil, GERCEKTEN kurulu Google Chrome'u kullaniyor - bkz. README).
+rem      degil, GERCEKTEN kurulu Google Chrome'u kullaniyor - bkz. README.
+rem      Bu yuzden "playwright install chromium" adimina gerek YOK -
+rem      yaklasik 180 MB'lik gereksiz bir indirme olurdu).
 rem
 rem Kullanim: setup.bat dosyasina cift tikla, ya da bir komut isteminde
 rem "setup.bat" yaz.
@@ -35,6 +36,17 @@ if errorlevel 1 (
 
 for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PY_VERSION=%%v
 echo Python bulundu (surum %PY_VERSION%)
+
+rem Kod 3.10+ sozdizimi kullaniyor (or. "X | None" tip imzalari) - eski
+rem bir Python'la kurulum sorunsuz gecer ama program ACILISTA anlasilmaz
+rem bir SyntaxError ile cokerdi. Burada net bir mesajla erken duruyoruz.
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+if errorlevel 1 (
+    echo HATA: Python %PY_VERSION% cok eski - bu program Python 3.10 ya da
+    echo uzerini gerektiriyor. Guncel surumu kur: https://python.org/downloads
+    pause
+    exit /b 1
+)
 
 if not exist ".venv" (
     echo Sanal ortam olusturuluyor ^(.venv^)...
@@ -63,9 +75,6 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-
-echo Playwright tarayici bilesenleri kuruluyor...
-python -m playwright install chromium
 
 echo.
 set CHROME_FOUND=0

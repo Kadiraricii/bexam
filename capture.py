@@ -23,6 +23,7 @@ from common import (
     browser_launch_kwargs,
     ensure_safe_full_path,
     extract_page_info,
+    live_url,
     now_stamp,
     resolve_active_page,
     sanitize_filename,
@@ -336,7 +337,7 @@ def capture_current_page(
         "gonderim_tarihi": info["gonderim_tarihi"],
         "onay": info["onay"],
         "puan": info["puan"],
-        "url": page.url,
+        "url": live_url(page),
         "pdf": str(pdf_path),
         # Tarayici yuklemeyi bitirmis ama goruntu gelmemis (ör. bozuk link)
         # gorsel sayisi - bunlar beklemekle duzelmiyor, sadece PDF'in elle

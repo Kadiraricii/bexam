@@ -27,6 +27,7 @@ from common import (
     already_captured_titles,
     browser_launch_kwargs,
     derive_course_label,
+    live_url,
     resolve_active_page,
     sanitize_filename,
 )
@@ -136,7 +137,7 @@ def main() -> None:
         except Exception:
             pass
 
-        grades_url = page.url
+        grades_url = live_url(page)
         course_label = derive_course_label(page)
         course_dir = OUTPUT_DIR / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
 
