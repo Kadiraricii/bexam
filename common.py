@@ -112,6 +112,45 @@ def ensure_safe_full_path(path: Path, protect_suffix_chars: int = 0) -> Path:
     return path.with_name(f"{new_stem}{suffix}")
 
 
+def set_windows_dpi_awareness() -> None:
+    """Windows'ta islemi "DPI-aware" olarak isaretler.
+
+    Bu CAGRILMAZSA, Tkinter'in Windows'ta bilinen bir sorunu devreye
+    giriyor: Windows, uygulamanin kendi ekran olcegini (DPI) BILMEDIGINI
+    varsayip TUM pencereyi kendi sistem olcekleme oranina (ör. %125-%150,
+    cogu Windows dizustu bilgisayarinda varsayilan) gore otomatik olarak
+    BUYUTUYOR - CANLI DOGRULANAN bir belirti tam olarak bu: pencere
+    neredeyse tam ekran acilip her sey (yazi, dugme, bosluk) macOS'a
+    kiyasla anlamsizca kocaman gorunuyordu. macOS'ta Retina olcekleme
+    farkli calistigi icin bu sorun hic gorunmuyordu.
+
+    SetProcessDpiAwareness(1) (PROCESS_SYSTEM_DPI_AWARE), Windows'a
+    "olceklemeyi ben (Tk) hallederim" diyerek bu otomatik buyutmeyi
+    kapatiyor - boylece DEFAULT_WINDOW_WIDTH/HEIGHT gibi boyutlar GERCEK
+    fiziksel pikselde, macOS'takiyle ayni gorece buyuklukte render edilir.
+
+    tk.Tk() OLUSTURULMADAN ONCE cagirilmasi SART - aksi halde Windows
+    penceresi zaten olceklenmis olarak acilir, sonradan duzeltilemez.
+    """
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        # Cok eski Windows surumlerinde (7 ve oncesi) shcore.dll
+        # bulunmuyor - daha eski, daha kisitli bir API'ye dusuyoruz.
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            # Ikisi de basarisiz olursa program yine de calismaya devam
+            # etmeli - sadece buyuk gorunmeye devam eder, cokmemeli.
+            pass
+
+
 def open_in_file_manager(path: Path) -> None:
     """Bir dosyayi/klasoru isletim sisteminin varsayilan uygulamasinda
     acar - macOS'ta `open`, Windows'ta `os.startfile`. Onceden sadece

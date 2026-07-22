@@ -37,6 +37,7 @@ bir worker thread'de sirayla islenir; GUI ile aralarinda iki kuyruk var
 (command_queue: GUI->worker, gui_queue: worker->GUI).
 """
 
+import platform
 import queue
 import threading
 import time
@@ -70,6 +71,7 @@ from common import (
     open_in_file_manager,
     resolve_active_page,
     sanitize_filename,
+    set_windows_dpi_awareness,
     wait_for_blackboard,
 )
 from scan_course import (
@@ -119,6 +121,26 @@ FONT_MUTED_BOLD = ("", 12, "bold")
 FONT_BUTTON = ("", 13, "bold")
 FONT_STAT_NUMBER = ("", 28, "bold")
 FONT_NAV_ITEM = ("", 14, "bold")
+
+# Windows'ta Tk, emoji karakterlerini (🎓📂🔄⚡ vb.) VARSAYILAN olarak
+# "Segoe UI Symbol" fontuyla render ediyor - bu, macOS'taki renkli emoji
+# gorunumunun aksine GRI/TEK RENK, silik bir sonuc veriyor (CANLI
+# DOGRULANDI). "Segoe UI Emoji" (Windows 10/11'de standart olarak kurulu
+# gelen bir font) ACIKCA istenirse Tk dogru, renkli glif setini seciyor.
+# macOS/Linux'ta sistem varsayilanini ("") bozmadan birakiyoruz - orada
+# zaten dogru render oluyor.
+_EMOJI_FONT_FAMILY = "Segoe UI Emoji" if platform.system() == "Windows" else ""
+
+
+def _emoji_font(size: int, weight: str | None = None) -> tuple:
+    """SADECE emoji/ikon icin kullanilan, baska metinle KARISMAYAN
+    Canvas.create_text()/Label metinlerinde kullanilir - platforma gore
+    doğru fontu seçer (bkz. yukaridaki _EMOJI_FONT_FAMILY docstring'i).
+    Emoji + normal (Turkce) metnin AYNI widget'ta karistigi yerlerde
+    KULLANILMAMALI - Segoe UI Emoji, Latin/Turkce karakterleri iyi
+    kapsamiyor."""
+    return (_EMOJI_FONT_FAMILY, size, weight) if weight else (_EMOJI_FONT_FAMILY, size)
+
 
 DEFAULT_WINDOW_WIDTH = 1420
 DEFAULT_WINDOW_HEIGHT = 900
@@ -418,7 +440,7 @@ class StatCard(tk.Frame):
         icon_canvas.pack(side="left", padx=(14, 10), pady=14)
         points = _rounded_rect_points(0, 0, 40, 40, 10)
         icon_canvas.create_polygon(points, smooth=True, fill=soft_color, outline="")
-        icon_canvas.create_text(20, 20, text=icon, font=("", 18))
+        icon_canvas.create_text(20, 20, text=icon, font=_emoji_font(18))
 
         text_col = tk.Frame(self, bg=COLOR_CARD)
         text_col.pack(side="left", fill="both", expand=True, pady=12, padx=(0, 14))
@@ -827,7 +849,7 @@ class BlackboardGUI:
         hero_canvas.create_polygon(
             _rounded_rect_points(2, 2, 110, 110, 26), smooth=True, fill=COLOR_ACCENT, outline="",
         )
-        hero_canvas.create_text(56, 56, text="🎓", font=("", 48))
+        hero_canvas.create_text(56, 56, text="🎓", font=_emoji_font(48))
 
         tk.Label(
             side_scroll, text="Hoş Geldiniz!", bg=COLOR_ONBOARD_SIDE_BG, fg=COLOR_TEXT,
@@ -855,7 +877,7 @@ class BlackboardGUI:
             )
             icon_canvas.pack(side="left", anchor="n", padx=(0, 14))
             icon_canvas.create_oval(1, 1, 43, 43, fill=COLOR_ACCENT_SOFT, outline="")
-            icon_canvas.create_text(22, 22, text=icon, font=("", 19))
+            icon_canvas.create_text(22, 22, text=icon, font=_emoji_font(19))
             text_col = tk.Frame(row, bg=COLOR_ONBOARD_SIDE_BG)
             text_col.pack(side="left", fill="x", expand=True)
             tk.Label(
@@ -975,7 +997,7 @@ class BlackboardGUI:
             icon_canvas.create_polygon(
                 _rounded_rect_points(1, 1, 47, 47, 12), smooth=True, fill=COLOR_ACCENT_SOFT, outline="",
             )
-            icon_canvas.create_text(24, 24, text=icon, font=("", 20))
+            icon_canvas.create_text(24, 24, text=icon, font=_emoji_font(20))
 
             text_col = tk.Frame(row, bg=COLOR_CARD)
             text_col.pack(side="left", fill="both", expand=True)
@@ -1056,7 +1078,7 @@ class BlackboardGUI:
         logo_canvas.create_polygon(
             _rounded_rect_points(0, 0, 34, 34, 9), smooth=True, fill=COLOR_ACCENT, outline=""
         )
-        logo_canvas.create_text(17, 17, text="📄", font=("", 17))
+        logo_canvas.create_text(17, 17, text="📄", font=_emoji_font(17))
         tk.Label(
             logo_row, text="Blackboard\nPDF Yakalayıcı", bg=COLOR_SIDEBAR_BG, fg=COLOR_TEXT,
             font=("", 14, "bold"), justify="left",
@@ -2592,6 +2614,9 @@ class BlackboardGUI:
 
 
 def main() -> None:
+    # tk.Tk() OLUSTURULMADAN ONCE cagirilmasi sart - bkz. fonksiyonun
+    # kendi docstring'i (common.py). Windows disinda no-op.
+    set_windows_dpi_awareness()
     root = tk.Tk()
     BlackboardGUI(root)
     root.mainloop()

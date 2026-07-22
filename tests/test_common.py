@@ -375,6 +375,64 @@ def test_has_seen_onboarding_and_mark_onboarding_seen_roundtrip(tmp_path, monkey
     assert common.has_seen_onboarding() is True
 
 
+# ---------- set_windows_dpi_awareness (Windows'ta "her sey kocaman" hatasi) ----------
+
+
+def test_set_windows_dpi_awareness_is_noop_on_non_windows(monkeypatch):
+    import platform as _platform
+
+    monkeypatch.setattr(_platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(common, "platform", _platform)
+
+    common.set_windows_dpi_awareness()  # exception firlatmamali
+
+
+def test_set_windows_dpi_awareness_calls_shcore_api_on_windows(monkeypatch):
+    import platform as _platform
+    import types
+
+    monkeypatch.setattr(_platform, "system", lambda: "Windows")
+    monkeypatch.setattr(common, "platform", _platform)
+
+    calls = []
+    fake_windll = types.SimpleNamespace(
+        shcore=types.SimpleNamespace(SetProcessDpiAwareness=lambda v: calls.append(("shcore", v))),
+    )
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
+
+    common.set_windows_dpi_awareness()
+
+    assert calls == [("shcore", 1)]
+
+
+def test_set_windows_dpi_awareness_falls_back_to_user32_when_shcore_missing(monkeypatch):
+    import platform as _platform
+    import types
+
+    monkeypatch.setattr(_platform, "system", lambda: "Windows")
+    monkeypatch.setattr(common, "platform", _platform)
+
+    calls = []
+
+    class _RaisingShcore:
+        def SetProcessDpiAwareness(self, _v):
+            raise AttributeError("eski Windows surumunde shcore yok")
+
+    fake_windll = types.SimpleNamespace(
+        shcore=_RaisingShcore(),
+        user32=types.SimpleNamespace(SetProcessDPIAware=lambda: calls.append("user32")),
+    )
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
+
+    common.set_windows_dpi_awareness()
+
+    assert calls == ["user32"]
+
+
 # open_in_file_manager testleri BILEREK subprocess.run/os.startfile'i
 # MOCK'LUYOR, GERCEKTEN cagirmiyor - erken bir surumde bu testler
 # gercekten Finder/Explorer/TextEdit acip gelistiricinin ekraninda
