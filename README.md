@@ -91,8 +91,13 @@ sorunsuz çalışması için şunlar kod seviyesinde ele alındı:
   aşabileceği için: klasör adları artık daha tutucu bir sınırla
   (`DEFAULT_FOLDER_MAX_CHARS`, 60 karakter) oluşturuluyor, ayrıca her
   PDF yazılmadan hemen önce `ensure_safe_full_path()` TAM yolu ölçüp
-  gerekirse dosya adının açıklayıcı kısmını kırpıyor — ONAY kodu (kimlik
-  belirleyici kısım) her zaman korunuyor.
+  gerekirse dosya adının açıklayıcı kısmını kırpıyor. Kırpma HER ZAMAN
+  dosya adının **kimlik belirleyici** kısmını korur — tek sayfa
+  yakalamada ONAY kodu, öğrenci PDF'lerinde sondaki
+  `{öğrenci_no}_{İsim-Soyisim}` bloğu. Bu ikincisi ayrıca önemli:
+  korunmasaydı iki farklı öğrencinin PDF'i kırpma sonrası aynı dosya
+  adına düşüp biri diğerinin PDF'ini sessizce ezebilirdi (bkz. aşağıdaki
+  sağlamlık bölümü, madde 13).
 - **`channel="chrome"`**: Playwright'in bu özelliği (Playwright'in kendi
   tarayıcısı yerine sistemde kurulu gerçek Chrome'u sürmek) Windows'ta da
   aynı şekilde destekleniyor, ek bir değişiklik gerekmedi.
@@ -114,52 +119,128 @@ python3 scan_course.py
 1. Tarayıcı açılır, SSO ile giriş yap.
 2. Taranacak dersin **Not Defteri** sayfasına git.
 3. Terminale dönüp ENTER'a bas.
-4. Script sırayla **"Görüntüle" butonu olan TÜM satırları** dener,
-   `capture.py` ile aynı yakalama mantığını (scroll + görsel yükleme
-   bekleme + PDF + ONAY/GÖNDERİM TARİHİ çıkarımı) çalıştırır, sonra bir
-   sonrakine geçer.
+4. Script sırayla durumu **"Tamamlandı"** ya da **"Tümüne Not Verildi"**
+   olan TÜM satırları dener (aşağıdaki "Satır seçimi" notuna bkz.), her
+   birinde o sınava giren tüm öğrencileri `capture.py` ile aynı yakalama
+   mantığını (scroll + görsel yükleme bekleme + PDF + ONAY/GÖNDERİM
+   TARİHİ çıkarımı) kullanarak yakalar, sonra bir sonraki satıra geçer.
 
-**Sınav tespiti isimden değil, içerikten yapılır**: İlk sürümde hangi
+**Satır seçimi durumdan yapılır, isimden değil**: Not Defteri'nde bir
+sınav satırını açan ayrı bir "Görüntüle" düğmesi yok — **"Not Verme
+Durumu"** sütunundaki etiketin kendisi tıklanabilir. İlk sürümde hangi
 satırların gerçekten sınav olduğu satır adına bakılarak (adında "sınav"
-geçiyor mu diye) tahmin ediliyordu. Bu kırılgan çıktı — hocalar sınavı
+geçiyor mu diye) tahmin ediliyordu; bu kırılgan çıktı çünkü hocalar sınavı
 "Quiz", "Vize", "Final", "Ara Sınav", "Midterm" gibi çok farklı
-adlandırabiliyor, sabit bir anahtar kelime listesi hiçbir zaman tam
-kapsayamaz. Artık isim filtresi YOK: her "Görüntüle" satırı denenir; bir
-satır açıldığında **ONAY kodu** görünmüyorsa (10 saniye içinde) bu satır
-sessizce PDF'e çevrilmeye çalışılmaz — "sınav/quiz değilmiş ya da
-gönderilmemiş" diye **atlanan** (hata değil) olarak işaretlenir ve bir
-sonraki satıra geçilir. Böylece hem hiçbir isimlendirme kaçırılmaz hem de
-ödev/tartışma forumu gibi alakasız satırlar sonuç PDF'lerini kirletmez.
+adlandırabiliyor. Artık isim filtresi YOK: durumu **"Tamamlandı"** ya da
+**"Tümüne Not Verildi"** (Blackboard ikisini de kullanabiliyor, ikisi de
+aynı şekilde tıklanabilir) olan **tüm satırlar** denenir; durumu **"Not
+verilecek bir şey yok"** olanlar (hiç gönderim almamış sınav/ödev/quiz
+satırları) baştan elenir çünkü bunlar zaten hiçbir zaman içerik
+üretmeyecektir. Tıklanan bir satırda **ONAY kodu** görünmüyorsa (birkaç
+saniye içinde) bu satır sessizce PDF'e çevrilmeye çalışılmaz — "sınav/quiz
+değilmiş ya da gönderilmemiş" diye **atlanan** (hata değil) olarak
+işaretlenir ve bir sonraki satıra geçilir.
 
-**Klasör yapısı**: `output/{ders adı}/{sınav adı}/{sınav_başlığı}_{onay_kodu}.pdf`
-Ders adı sekme başlığından (`page.title()`), sınav klasörü de satır adından
-türetilir. Bu yapı bilinçli olarak hoca (instructor) sürümüyle aynı şekilde
-kurgulandı: hoca hesabına geçince aynı `{ders}/{sınav}/` klasörünün içine
-her öğrenci için `{öğrenci_adı}_{onay_kodu}.pdf` düşecek — yani "Kısa Sınav 1"
-klasörüne girildiğinde o sınava giren **tüm öğrencilerin** dosyaları aynı
-yerde birikecek. Öğrenci hesabıyla test ederken zaten tek dosya düşüyor,
-ama klasör iskeleti şimdiden bu çoklu-öğrenci senaryosuna hazır.
+**Aynı adlı iki sınav satırı**: Bir sınav satırı adıyla bulunup
+tıklandığı için, hoca Not Defteri'nde (nadiren de olsa) **aynı adla iki
+satır** açmışsa ikinci satır artık sessizce atlanmıyor (eskiden ilk satır
+iki kez taranıp ikincisi hiç dokunulmadan geçiliyordu, kullanıcı bunu fark
+edemiyordu) — ikinci satır "aynı adla N. satır" gerekçesiyle açıkça
+atlananlar listesine düşer; Blackboard'da sınavın adını geçici olarak
+değiştirip tekrar taramak yeterli.
 
-**Idempotent çalışma**: `.state/captures.json`'da kaydı olan bir sınav
-(aynı başlık) tekrar karşına çıktığında, script önce o kaydın PDF dosyasının
-**hâlâ diskte olup olmadığını** kontrol eder — sadece log'a değil, dosyanın
-varlığına bakar. Dosya duruyorsa atlar; silinmiş/taşınmışsa yeniden yakalar.
+Bir satırın "Tamamlandı" etiketine tıklandıktan sonra Blackboard genelde
+önce o sınavın **tüm gönderimlerini** listeleyen bir ara "Gönderimler"
+tablosu açıyor (bazen tek gönderim varsa bu ara adım atlanıp doğrudan
+değerlendirme sayfasına düşülüyor); script bu tabloda bir öğrenciye daha
+tıklayıp asıl **öğrenciler paneli olan** değerlendirme sayfasına ulaşıyor,
+oradan itibaren aşağıdaki `scan_grade_center.py` mantığıyla o sınava giren
+**tüm öğrencileri** tek tek yakalıyor. Not Defteri satırındaki "X / Y
+gönderildi" sayısı da ayrıca okunup gerçekte yakalanan öğrenci sayısıyla
+karşılaştırılıyor — uyuşmazsa açık bir uyarı verilir (bkz. aşağıdaki
+sağlamlık bölümü, madde 12).
+
+**Klasör yapısı**: `output/{ders adı}/{sınav adı}/{sınav_başlığı}_{öğrenci_no}_{İsim-Soyisim}.pdf`
+Ders adı sekme başlığından (`page.title()`), sınav klasörü de Not
+Defteri'ndeki satır adından türetilir — "Kısa Sınav 1" klasörüne girince
+o sınava giren **tüm öğrencilerin** dosyaları aynı yerde birikir.
+Öğrenci numarası kısmı yalnızca `scan_students.py` ile üretilmiş bir
+`ogrenciler.csv` varsa eklenir (bkz. aşağıdaki ilgili bölüm), yoksa dosya
+adı sadece `{sınav_başlığı}_{İsim-Soyisim}.pdf` olur.
+
+**Idempotent çalışma**: `.state/captures.json`'da kaydı olan bir
+öğrenci+sınav çifti (`{ders} - {sınav} - {öğrenci}` anahtarıyla) tekrar
+karşına çıktığında, script önce o kaydın PDF dosyasının **hâlâ diskte,
+gerçekten geçerli boyutta (en az 3KB)** olup olmadığını kontrol eder —
+sadece log'a değil, dosyanın varlığına ve boyutuna bakar. Dosya
+duruyorsa atlar; silinmişse/taşınmışsa/yarım kalmışsa yeniden yakalar.
 Bu sayede scripti güvenle defalarca çalıştırabilir, yarıda kalan bir
-taramayı kaldığı yerden devam ettirebilir, kazayla silinen bir PDF'i de
-kaybetmemiş olursun. Sonunda "Yakalanan / atlanan / hatalı" sayaç özeti
-gösterilir.
+taramayı kaldığı yerden devam ettirebilir, kazayla silinen ya da
+elektrik kesintisiyle yarım kalan bir PDF'i de kaybetmemiş olursun.
+Sonunda "Yakalanan / atlanan / hatalı" sayaç özeti gösterilir (öğrenci
+bazlı ve sınav-satırı bazlı sayaçlar ayrı tutulur).
 
-**Overlay kapatma**: Sınav sonucu overlay'i, tıklama sonrası bir SPA
-route'a (`.../grades/student-submission-view?contentId=...`) karşılık
-geldiği için `Escape` yerine tarayıcı geçmişi (`go_back`) ile kapatılır;
-bu başarısız olursa Not Defteri URL'ine doğrudan gidilerek kurtarma
-yapılır. Bir satır tamamen hata verirse döngü çökmez, otomatik kurtarıp
-sıradaki sınava geçer.
+**Overlay kapatma**: Bir sınav satırından çıkıp Not Defteri listesine
+dönüş, tıklama sonrası açılan SPA route'undan `Escape` yerine tarayıcı
+geçmişi (`go_back`) ile yapılır; bu başarısız olursa (ör. bir sınavda
+onlarca öğrenci arasında gezinilmişse tek bir `go_back` yetmez) Not
+Defteri URL'ine doğrudan gidilerek kurtarma yapılır. Kurtarma da
+başarısız olursa (sayfa artık bilinmeyen bir durumda) tarama, yanlış
+satırlara tıklama riskine girmeden güvenle durur — bir satır tamamen
+hata verse bile döngü çökmez, mümkünse otomatik kurtarıp sıradaki
+sınava geçer.
 
 Not: Satır/buton eşleştirmesi mevcut DOM yapısına göre yazıldı; ilk
 çalıştırmada "Hiç sınav satırı bulunamadı" uyarısı çıkarsa sayfa yapısı
 farklı demektir — ekran görüntüsü veya sayfa HTML'i paylaşılırsa
 selector'lar düzeltilir.
+
+## Öğrenci numaralı PDF adları: scan_students.py
+
+Hoca hesabında öğrenci PDF'lerinin dosya adına öğrenci numarası da
+eklenebilmesi için ayrı, tek seferlik bir tarama:
+
+```bash
+source .venv/bin/activate
+python3 scan_students.py
+```
+
+1. Tarayıcı açılır, SSO ile giriş yap.
+2. Taranacak dersin **Not Defteri > "Öğrenciler"** sekmesine git (sınavın
+   değil, **dersin** öğrenci listesi — bkz. yukarıdaki Not Defteri akışı).
+3. Terminale dönüp ENTER'a bas.
+4. Script tablodaki (Ad Soyad, Kullanıcı Adı/Öğrenci No) çiftlerini,
+   varsa sayfalama boyunca tüm sayfaları gezerek toplar ve
+   `output/{ders adı}/ogrenciler.csv` dosyasına yazar (`;` ayraçlı,
+   UTF-8 BOM'lu — Excel'de Türkçe karakterler bozulmadan açılsın diye).
+
+Bu CSV bir kez üretildikten sonra, o derste sonradan çalıştırılan **her**
+`scan_course.py` / `gui.py` taraması onu otomatik okur ve PDF adına
+öğrenci numarasını ekler:
+
+```
+{sınav_adı}_{öğrenci_no}_{İsim-Soyisim}.pdf
+Örnek:  Kısa Sınav 1_2420171019_Ahmet-Yılmaz.pdf
+```
+
+CSV yoksa özellik sessizce devre dışı kalır (PDF adında sadece isim
+kısmı olur), hata vermez — sıra bağımlılığı yok, `scan_students.py`'yi
+hiç çalıştırmadan da normal akış çalışmaya devam eder.
+
+**Ad eşleştirmesi**: CSV'deki ad ile sınav sidebar'ından okunan ad aynı
+Blackboard sayfasından farklı zamanlarda toplandığı için küçük biçimsel
+farklar (fazla boşluk, harf kasası) taşıyabilir — eşleme yapılırken bunlar
+yok sayılır (Türkçe I/İ kuralına göre; Python'un standart `casefold`'u bu
+kuralı bilmediği için "ARICI" ile "Arıcı" normalde eşleşmezdi, ayrıca
+düzeltildi).
+
+**Sayfalama takılması**: "Sonraki sayfa" butonu tıklanabilir görünüp de
+sayfa gerçekte değişmiyorsa (ör. buton `disabled` yerine sadece
+`aria-disabled` işaretliyse) tarama artık üst üste 2 verimsiz sayfadan
+sonra erken çıkar — 200 sayfanın (mutlak üst sınır) sonuna kadar boşuna
+dönmez. Tarama bitince, Blackboard'ın kendi "1-20 / 90" gibi toplam
+gösterge metniyle gerçekten toplanan öğrenci sayısı karşılaştırılır;
+uyuşmazsa "CSV eksik olabilir, tekrar dene" uyarısı verilir.
 
 ## Blackboard REST API araştırması (sonuç: kullanmıyoruz)
 
@@ -180,8 +261,9 @@ Bu yüzden tarayıcı otomasyonu (Playwright) ile devam ediyoruz.
 | Dosya | Açıklama |
 |---|---|
 | `capture.py` | Tek sayfa yakalama — tarayıcıyı açar, manuel/tekrarlı yakalama döngüsü |
-| `scan_course.py` | Bir dersin Not Defteri'ndeki tüm sınavları otomatik bulup yakalar (öğrenci hesabı) |
-| `scan_grade_center.py` | Bir sınavdaki tüm öğrencileri otomatik bulup yakalar (hoca hesabı, terminal) |
+| `scan_course.py` | Bir dersin Not Defteri'ndeki tüm sınavları, her sınavdaki tüm öğrencileri otomatik bulup yakalar (hoca hesabı, terminal) |
+| `scan_grade_center.py` | Doğrudan bir sınavın öğrenci panelindeki tüm öğrencileri yakalar (hoca hesabı, terminal — `scan_course.py`'nin de içeriden kullandığı çekirdek) |
+| `scan_students.py` | Dersin "Öğrenciler" sekmesindeki tam ad + öğrenci no listesini CSV'ye çıkarır |
 | `gui.py` | Hoca için grafik arayüz — ders/sınav seçip toplu tarama başlatma |
 | `common.py` | Sabitler, dosya adı temizleme, ONAY/GÖNDERİM TARİHİ regex çıkarımı |
 | `setup.sh` / `setup.bat` | Kurulum: sanal ortam + bağımlılıklar + Playwright + Chrome kontrolü (macOS-Linux / Windows) |
@@ -206,16 +288,21 @@ python3 scan_grade_center.py
 2. Grade Center'dan herhangi bir öğrencinin sınav sonucunu aç (sol tarafta
    "Öğrenciler" listesi görünmeli — ekran görüntüsündeki gibi).
 3. Terminale dönüp ENTER'a bas.
-4. Script soldaki listede adı+notu geçen ("10 / 100" gibi) her satırı bulur,
-   tek tek tıklar, ONAY kodunun değiştiğini doğrulayıp (yani gerçekten o
-   öğrencinin sayfası yüklendiğinden emin olup) yakalar.
-5. Çıktı: `output/{sınav adı}/{öğrenci adı}_{onay kodu}.pdf` — tam
-   `ornekyapi.md`'de anlaşılan yapı.
+4. Script soldaki paneldeki **tüm** satırları bulur (sadece sayısal notu
+   olanlar değil — henüz notlandırılmamış/muaf öğrenciler de dahil, bkz.
+   aşağıdaki sağlamlık bölümü madde 3), tek tek tıklar; PDF üretmeden önce
+   **üç ayrı sinyali** doğrular: ONAY kodu var mı, tıklanan öğrencinin adı
+   "GÖNDERİM TARİHİ" bloğuna yakın metinde tam olarak geçiyor mu (substring
+   çakışması engellenir — "AYŞE KAYA" aranırken "AYŞE KAYAALP" sayfası
+   kabul edilmez), sayfadaki not sidebar'da görünen notla eşleşiyor mu.
+5. Çıktı: `output/{sınav adı}/{sınav_başlığı}_{öğrenci_no}_{İsim-Soyisim}.pdf`
+   (öğrenci no kısmı yalnızca bir `ogrenciler.csv` varsa eklenir, bkz.
+   yukarıdaki "Öğrenci numaralı PDF adları" bölümü).
 
-**Ders adı**: Şu an klasör adı sadece sınav adından (`page.title()`)
-türetiliyor, ayrı bir ders klasörü katmanı yok — gerekirse
-`scan_course.py`'deki gibi `output/{ders}/{sınav}/` şeklinde
-derinleştirilir.
+**Ders adı**: Bu script'i doğrudan çalıştırınca klasör adı sadece sınav
+adından (`page.title()`) türetiliyor, ayrı bir ders klasörü katmanı yok
+(GUI ve `scan_course.py` bu fonksiyonu `output/{ders}/{sınav}/` şeklinde
+bir klasör vererek çağırıyor, ders katmanı orada zaten var).
 
 ## Grafik arayüz: gui.py
 
@@ -246,10 +333,13 @@ Akış:
    son geçiş anını yanlışlıkla "giriş yok" sanmamak için). Domain
    doğruysa GUI sayfanın **türünü kendisi anlar** ve bulduklarını
    log'da listeler:
-   - Dersin **Not Defteri** sayfasıysa → o derste bulunan tüm sınavlar
-     (`scan_course.py` mantığı — öğrenci hesabı).
-   - Bir sınavın **öğrenci listesi** sayfasıysa → o sınava giren tüm
-     öğrenciler (`scan_grade_center.py` mantığı — hoca hesabı).
+   - Dersin **Not Defteri** sayfasıysa → o derste "Tamamlandı"/"Tümüne
+     Not Verildi" durumundaki tüm sınavlar, her biri için o sınava giren
+     tüm öğrenciler (`scan_course.py` mantığı).
+   - Doğrudan bir sınavın **öğrenci listesi** ("Öğrenciler" paneli olan)
+     sayfasındaysa → o sınava giren tüm öğrenciler (`scan_grade_center.py`
+     mantığı — `scan_course.py`'nin her sınav satırı için içeriden
+     kullandığı aynı fonksiyon).
    - Hiçbiri değilse, log alanında açık bir uyarı gösterilir.
 3. Bulunanlar uygunsa **"PDF Olarak İndir"**e basılır — ancak o zaman
    gerçek yakalama/indirme başlar. Bitince log alanının üstünde
@@ -258,7 +348,20 @@ Akış:
    (üzerine yazılmaz — zamanla birikimli bir geçmiş oluşur). Başka bir
    ders/sınava gidip tekrarlanabilir. **"Çıktı Klasörünü Aç"** Finder'da
    seçili çıktı klasörünü açar.
-4. **"Güvenli Çıkış"**: tarayıcıyı (ve Playwright arka plan sürecini)
+4. **"Öğrenci Tara"** (isteğe bağlı, ana akıştan bağımsız): dersin Not
+   Defteri > "Öğrenciler" sekmesindeyken basılır, `scan_students.py`
+   mantığıyla tam ad + öğrenci no listesini CSV'ye çıkarır. Bu liste
+   varsa o dersteki tüm sonraki taramalarda PDF adına öğrenci numarası
+   otomatik eklenir (bkz. yukarıdaki "Öğrenci numaralı PDF adları"
+   bölümü). Aynı tek Playwright arka plan thread'ini paylaştığı için
+   "Bul ve Tara" / "PDF Olarak İndir" ile aynı anda çalışmaz — biri
+   sürerken diğer ikisinin butonu da kapalı kalır.
+5. **İki-faktörlü sayfa/klasör kontrolü**: "Bul ve Tara" ile "PDF Olarak
+   İndir" arasında tarayıcıda başka bir sayfaya geçilirse indirme hiç
+   başlamaz (adres uyuşmazlığı net bir mesajla bildirilir); çıktı
+   klasörü keşiften sonra değiştirilirse de indirme yeni seçilen
+   klasöre yapılır, eski klasöre değil.
+6. **"Güvenli Çıkış"**: tarayıcıyı (ve Playwright arka plan sürecini)
    düzgünce kapatıp öyle pencereyi kapatır — arkada asılı Chrome süreci
    bırakmaz. Pencerenin sağ üst köşesindeki normal kapatma (X) düğmesi
    de aynı güvenli kapanışı tetikler. **Aktif bir tarama sürerken**
@@ -413,6 +516,66 @@ eklendi (tam detay: `~/.claude/plans/streamed-painting-hanrahan.md`).
     tıklamaya çalışıyordu. Artık kurtarma doğrulanamazsa tarama o an
     güvenle durduruluyor, yanlış satırlara asla tıklanmıyor.
 
+**Üçüncü tur — kod derinlemesine tekrar tarandı, 12 yeni senaryo ele alındı**:
+
+1. **Kalabalık sınıfta öğrenci listesi mükerrer toplanıyordu** — sol
+   panel kaydırılırken pencereler üst üste biner (%80 kaydırılır, %20
+   örtüşme kalır); eski kod sadece *bitişik* tekrarı atıyordu, blok
+   hâlinde gelen tekrarları (A,B,C,D + C,D,E,F) kaçırıyordu. Liste
+   sanallaştırılmamışsa (virtualized değilse) her turda tüm liste yeniden
+   okunup **ikiye katlanabiliyordu** — sahte "(2)" kopya PDF'leri, şişik
+   sayımlar. Artık örtüşme dikkate alınarak birleştiriliyor; aynı isimli
+   *gerçek* iki öğrenci hâlâ korunuyor, sadece pencere tekrarları eleniyor.
+2. **Yanlış öğrenciye tıklama / yanlış doğrulama** — isim eşleme
+   substring'di: "AYŞE KAYA" aranırken "AYŞE KAYAALP" satırına da
+   tıklanabiliyordu, üstelik **doğrulama da** substring olduğu için bu
+   yanlış eşleşmeyi "doğru" sayıp geçebiliyordu. Artık tıklama tam satır
+   eşleşmesiyle yapılıyor (bulunamazsa eski davranışa güvenli düşüş),
+   başlık doğrulaması da kelime sınırına duyarlı (Türkçe harfler dahil).
+3. **Türkçe I/İ harf kasası** — Python'un `casefold`'u Türkçe kuralını
+   bilmiyor: "ARICI" ile "Arıcı" normalde eşleşmiyordu, bu yüzden
+   `scan_students.py`'nin ürettiği CSV'deki öğrenci numarası sessizce PDF
+   adına eklenmiyordu. Artık eşleştirmeden önce Türkçe'ye göre doğru
+   küçültme uygulanıyor.
+4. **`captures.json` bozulursa program kalıcı kilitleniyordu** — dosya
+   elle düzenleme/güç kesintisi gibi bir sebeple bozulursa eskiden her
+   indirme denemesi anlaşılmaz bir "beklenmedik iç hata" ile bloke
+   oluyordu. Artık bozuk dosya **silinmeden** `captures.bozuk-{tarih}.json`
+   adıyla kenara alınıp boş geçmişle devam ediliyor (gerekirse elle
+   kurtarılabilir).
+5. **Yarım kalan PDF öğrenciyi sonsuza dek atlatıyordu** — PDF tam
+   yazılırken elektrik kesilirse/uygulama çökerse diskte yarım (açılamaz)
+   bir dosya kalabilir; sadece `exists()` kontrolü bu öğrenciyi "zaten
+   yakalanmış" sayıp **bir daha asla** yeniden denemiyordu. Artık "zaten
+   var" sayılmak için dosyanın en az 3KB olması şart — yarım dosya
+   sonraki taramada sağlamıyla değiştirilir.
+6. **Aynı adla iki sınav satırı sessizce atlanıyordu** — madde açıklaması
+   yukarıda ("Aynı adlı iki sınav satırı" bölümü).
+7. **Oturum düşünce devre kesici gereksiz yere bekletiyordu** — oturum
+   düşmüşse (login'e yönlendirilmişse) kalan **her** öğrenci/satır da aynı
+   şekilde başarısız olacaktır; eskiden devre kesicinin 5 denemeyi
+   tüketmesi bekleniyordu (her biri onlarca saniyelik doğrulama
+   beklemesiyle, toplam dakikalarca boşuna dönme). Artık ilk hatadan sonra
+   sayfa Blackboard dışındaysa tarama **anında** durup net bir mesaj
+   veriyor.
+8. **"Bul ve Tara" ile "PDF Olarak İndir" arasında sayfa değişimi** —
+   kullanıcı taramayı onaylamadan önce tarayıcıda başka bir sayfaya
+   geçmiş olabilir (yüksek olasılıklı bir kullanıcı hatası). Artık kesif
+   anındaki adres kaydediliyor; indirme başlarken adres değişmişse
+   indirme **hiç başlamıyor**, "doğru sayfaya dönüp tekrar Bul ve Tara'ya
+   bas" mesajı veriliyor.
+9. **Keşiften sonra çıktı klasörü değiştirilirse** — PDF'ler artık eski
+   (keşif anındaki) klasöre değil, yeni seçilen klasöre iniyor.
+10. **`scan_students.py` sayfalama takılması** — "Sonraki" butonu
+    tıklanabilir görünüp sayfa değişmezse eskiden 200 tur (~100+ saniye)
+    boşa dönüyordu; artık art arda 2 verimsiz sayfada erken çıkıyor.
+11. **Kullanıcı taramayı kendi durdurduğunda yanlış alarm** — "Güvenli
+    Çıkış" ile taramayı durduran kullanıcıya artık "X gönderim
+    bekleniyordu, eksik olabilir" uyarısı YANLIŞLIKLA verilmiyor; bu
+    uyarı yalnızca gerçek eksik-yakalama durumlarına saklandı.
+12. **Uzun dosya adı kırpması öğrenci kimliğini yiyordu** — yukarıdaki
+    "Uzun yol (MAX_PATH) sorunu" bölümünde detaylandırıldı.
+
 **Ödev sayfalarında yanlış sekme yakalanması (içerik doğruluğu hatası)**:
 Bazı ödev "Değerlendirme Geri Bildirimi" sayfalarında iki sekme oluyor —
 sabit **"Yönergeler"** (hocanın ödev açıklaması) ve öğrencinin gönderdiği
@@ -440,9 +603,10 @@ madde 5).
 - ✅ `scan_course.py` gerçek Not Defteri sayfasında test edildi ve başarılı
   çalışıyor; ders bazlı klasörleme + idempotent atlama + hata kurtarma
   eklendi.
-- ✅ `scan_grade_center.py` yazıldı ve yukarıdaki felaket senaryolarına
-  karşı sağlamlaştırıldı (bir hoca ekran görüntüsüne dayanarak) —
-  gerçek Grade Center'da henüz test edilmedi, sırada bu var.
+- ✅ `scan_grade_center.py` yazıldı, gerçek hoca hesabı kullanımından
+  gelen geri bildirimle (Not Defteri'nde "Tamamlandı"/"Tümüne Not
+  Verildi" durum tespiti, "Gönderimler" ara sayfası, çoklu-öğrenci
+  yakalama) test edilip iyileştirildi.
 - ✅ GUI, öğrenci hesabıyla uçtan uca gerçek testte çalıştı: giriş → SSO
   sorunları giderildi (gerçek Chrome + otomasyon gizleme, çoklu sekme
   takibi, tekrar-deneyen giriş kontrolü) → "Bul ve Tara" / "PDF Olarak
@@ -456,9 +620,9 @@ madde 5).
   decode edilmesi bekleniyor; süre dolarsa PDF üretilmiyor (tekrar
   denenir), tarayıcının "bitti ama gelmedi" dediği gerçekten bozuk
   görseller ise PDF'i durdurmadan ayrı bir uyarı olarak loglanıyor.
-- ✅ Sınav tespiti isim tabanlı anahtar kelimeden içerik tabanlı (ONAY
-  kodu var mı) tespite geçirildi — bkz. yukarıdaki "Sınav tespiti"
-  notu.
+- ✅ Sınav tespiti isim tabanlı anahtar kelimeden durum/içerik tabanlı
+  (ONAY kodu var mı) tespite geçirildi — bkz. yukarıdaki "Satır seçimi
+  durumdan yapılır, isimden değil" notu.
 - ✅ Yakalama sırasında sayfaya enjekte edilen `FORCE_VISIBLE_CSS`
   (`* { overflow: visible !important; ... }`) artık işlem bitince
   (başarılı ya da hatalı fark etmeksizin) sayfadan kaldırılıyor. Öncesinde
@@ -466,30 +630,36 @@ madde 5).
   olduğu için aynı sekmede başka bir derse/sayfaya geçildiğinde (tam
   sayfa yenilenmeden) o yeni sayfa da bozuk görünebiliyordu (dropdown/
   panel gibi overflow'a dayanan UI öğeleri bozuluyordu) — düzeltildi.
+- ✅ Not Defteri satır tespiti "Görüntüle" düğmesinden "Not Verme Durumu"
+  sütunundaki **"Tamamlandı" / "Tümüne Not Verildi"** durum etiketlerine
+  geçirildi; "Gönderimler" ara sayfası tespit edilip otomatik geçiliyor,
+  sol panelde bulunan **tüm** öğrenciler tek tek yakalanıyor
+  (`capture_exam_submissions`) — artık tek öğrenciyle sınırlı değil.
+- ✅ `scan_students.py` eklendi: dersin "Öğrenciler" sekmesinden ad +
+  öğrenci no listesini CSV'ye çıkarıyor, bu liste varsa sonraki tüm
+  taramalarda PDF adına öğrenci numarası otomatik ekleniyor. GUI'de
+  bağımsız bir "Öğrenci Tara" butonu olarak sunuluyor.
+- ✅ Projede derinlemesine (kod satır satır) tekrar tarama yapıldı, kritik
+  veri bütünlüğü riskleri (mükerrer öğrenci kaydı, yanlış öğrenciye
+  yanlış PDF, kırpma sırasında öğrenci kimliğinin kaybolması, bozuk log
+  dosyasının programı kilitlemesi, yarım kalan PDF'in sonsuza dek
+  atlanması) bulunup düzeltildi — tam liste yukarıdaki "Üçüncü tur"
+  bölümünde.
 
-### Keşfedilen yeni sayfa türü — "Gönderimler" listesi (henüz kod yazılmadı)
+### "Gönderimler" listesi — artık desteklenen akış
 
-Hocadan gelen bir ekran görüntüsünde, bir sınava (ör.
-`BST020-KısaSınav1`) tıklandığında önce **"Gönderimler (N)"** sekmesi
-açık bir liste sayfasına düşüldüğü görüldü: tüm öğrenciler tek tabloda
-(Öğrenci, Öğrenci Durumu, Not Verme Durumu, Not, Gönder), ve üstte
-kritik bir bilgi — **"15/20 GÖNDERİLDİ"** gibi net bir **toplam sayı**.
-
-Bu, `scan_grade_center.py`'nin şu an varsaydığı "Öğrenciler" sidebar'lı
-tek-öğrenci-açık görünümünden **farklı, muhtemelen bir önceki adım**.
-Hipotez (henüz doğrulanmadı): bu listede bir öğrenci satırına tıklamak,
-zaten desteklediğimiz sidebar'lı görünüme götürüyor olabilir.
-
-Bu sayfa doğrulanıp desteklenirse iki fayda sağlar:
-1. Hoca için daha doğal bir başlangıç noktası (tek öğrenci açmaya
-   gerek kalmadan doğrudan sınava tıklamak yeterli olur).
-2. **Toplam sayı doğrulaması** — uzun zamandır aranan "90 öğrencide
-   kaçını gerçekten yakaladık" sorusuna cevap: yakalanan sayı ile bu
-   sayfadaki "X/Y GÖNDERİLDİ" karşılaştırılıp eksik varsa açıkça
-   uyarılabilir.
-
-**Kasıtlı olarak henüz kod yazılmadı** — bir öğrenci satırına
-tıklandığında gerçekte ne olduğunu gösteren bir ekran görüntüsü
-bekleniyor; kör tahminle selector yazmak daha önce defalarca yanlış
-yönlendirmişti (bkz. SSO/sekme takibi hikayesi yukarıda), aynı hataya
-düşülmeyecek.
+Önceki bir sürümde hocadan gelen bir ekran görüntüsüyle keşfedilip henüz
+kod yazılmamış olarak not edilen davranış artık uygulandı: Not
+Defteri'nde bir sınav satırının "Tamamlandı" etiketine tıklandığında
+Blackboard genelde önce o sınavın **tüm gönderimlerini** listeleyen bir
+ara "Gönderimler" tablosu açıyor (tek gönderim varsa bu ara adım
+atlanıp doğrudan değerlendirme sayfasına düşülebiliyor). `scan_course.py`
+içindeki `_enter_flexible_grading_view` bu iki durumu da ele alıyor: önce
+kısa süre ONAY metnini bekliyor, bulamazsa ara tablodaki herhangi bir
+"Tamamlandı" durumundaki satıra bir kez daha tıklayıp asıl **öğrenciler
+paneli olan** değerlendirme sayfasına ulaşıyor. Oradan itibaren
+`capture_exam_submissions` sol paneldeki **tüm öğrencileri** tek tek
+yakalıyor. Not Defteri satırındaki "X / Y gönderildi" sayısı da ayrıca
+okunup gerçekte yakalanan (+ zaten var olan) öğrenci sayısıyla
+karşılaştırılıyor; uyuşmazsa "eksik olabilir, PDF'leri elle say" uyarısı
+veriliyor.
