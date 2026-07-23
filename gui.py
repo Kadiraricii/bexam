@@ -71,6 +71,7 @@ from common import (
     load_student_roster,
     mark_onboarding_seen,
     open_in_file_manager,
+    page_on_blackboard,
     resolve_active_page,
     sanitize_filename,
     set_windows_dpi_awareness,
@@ -551,19 +552,9 @@ def _format_relative_time(dt: datetime) -> str:
 SAFE_EXIT_JOIN_TIMEOUT_S = 40.0
 
 
-def _page_still_on_blackboard(page) -> bool:
-    """Devre kesici tetiklendiginde son bilinen sayfanin hala Blackboard
-    domaininde olup olmadigina bakar - degilse (ör. login sayfasina geri
-    dusulmusse) oturumun suresi dolmus olabilecegini kullaniciya
-    belirtmek icin kullanilir (bkz. cagiran yerdeki emit mesaji).
-
-    live_url() kullaniyor - bkz. common.py'deki docstring: ham page.url,
-    SSO'nun capraz-kaynak yonlendirme zincirinde eski bir URL'de takili
-    kalabiliyor."""
-    try:
-        return live_url(page).startswith(BASE_URL)
-    except Exception:
-        return False
+# Mantik common.page_on_blackboard'a tasindi (scan_course da ayni kontrole
+# ihtiyac duyunca) - buradaki ad, mevcut cagiran yerler icin korunuyor.
+_page_still_on_blackboard = page_on_blackboard
 
 
 ONBOARDING_STEPS = [
@@ -2510,6 +2501,19 @@ class BlackboardGUI:
                 emit(f"  HATA: {exc}")
                 totals["fail"] += 1
                 consecutive_failures += 1
+                # Oturum dustuyse (sayfa artik Blackboard'da degil, ör.
+                # login'e yonlendirildi) sonraki HER satir da ayni sekilde
+                # patlayacak - devre kesicinin 5 hatayi tuketmesini (her
+                # biri uzun dogrulama beklemeleriyle) beklemek sadece
+                # zaman kaybi. Hemen, net bir mesajla duruyoruz.
+                if not _page_still_on_blackboard(page):
+                    emit(
+                        "  UYARI: Sayfa artık Blackboard'da görünmüyor — oturumun "
+                        "süresi dolmuş olabilir. Tarama hemen durduruldu; tarayıcıda "
+                        "tekrar giriş yapıp 'Bul ve Tara'yı tekrarla (indirilenler "
+                        "atlanacak, kaldığın yerden devam eder)."
+                    )
+                    break
                 if not recover(grades_url):
                     break
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -2587,6 +2591,17 @@ class BlackboardGUI:
                 emit(f"  HATA: {exc}")
                 totals["fail"] += 1
                 consecutive_failures += 1
+                # bkz. _scan_not_defteri'deki ayni kontrolun yorumu: oturum
+                # dustuyse kalan her ogrenci de ayni sekilde patlayacak,
+                # devre kesiciyi beklemek sadece zaman kaybi.
+                if not _page_still_on_blackboard(page):
+                    emit(
+                        "  UYARI: Sayfa artık Blackboard'da görünmüyor — oturumun "
+                        "süresi dolmuş olabilir. Tarama hemen durduruldu; tarayıcıda "
+                        "tekrar giriş yapıp 'Bul ve Tara'yı tekrarla (indirilenler "
+                        "atlanacak, kaldığın yerden devam eder)."
+                    )
+                    break
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                     emit(
                         f"  UYARI: art arda {consecutive_failures} hata, tarama durduruldu."

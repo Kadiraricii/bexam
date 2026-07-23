@@ -17,6 +17,7 @@ from playwright.sync_api import Page, sync_playwright
 
 from common import (
     BASE_URL,
+    MIN_VALID_PDF_BYTES,
     OUTPUT_DIR,
     PROFILE_DIR,
     append_log,
@@ -92,7 +93,11 @@ html, body {
 """
 
 AUTO_SCROLL_MAX_ITERATIONS = 120
-AUTO_SCROLL_MIN_PDF_BYTES = 3000
+# Esik artik common.MIN_VALID_PDF_BYTES'ta yasiyor: ayni deger
+# already_captured_titles'in "bu PDF gecerli mi" kararinda da kullaniliyor
+# (yarim yazilmis PDF'in ogrenciyi sonsuza dek atlatmasina karsi) - iki
+# tarafin esiginin birbirinden kopmamasi icin tek kaynaktan geliyor.
+AUTO_SCROLL_MIN_PDF_BYTES = MIN_VALID_PDF_BYTES
 
 # Hocalarin sinav sorularina koydugu fotograflar bazen PDF'e "acilmamis"
 # (bos/kirik) gorunumde giriyordu - sebebi, page.pdf() cagrisinin

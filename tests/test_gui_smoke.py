@@ -445,6 +445,33 @@ def test_start_download_pending_uses_freshly_chosen_output_folder(gui_app, tmp_p
     assert payload["course_dir"] == new_dir / "BST020"
 
 
+def test_grade_center_scan_stops_immediately_when_session_dropped(gui_app, monkeypatch, tmp_path):
+    """FELAKET SENARYOSU: SSO oturumu taramanin ortasinda dustu (sayfa
+    login'e yonlendirildi). Eskiden devre kesici 5 hatayi (her biri uzun
+    dogrulama beklemeleriyle, toplam dakikalar) tuketene kadar bosuna
+    deneniyordu - artik ILK hatadan sonra sayfa Blackboard disindaysa
+    tarama HEMEN, net bir mesajla durmali."""
+    monkeypatch.setattr(
+        gui_module, "capture_student",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("dogrulanamadi")),
+    )
+    monkeypatch.setattr(gui_module, "_page_still_on_blackboard", lambda page: False)
+    monkeypatch.setattr(gui_module, "load_student_roster", lambda d: {})
+
+    student_rows = [("AHMET YILMAZ", "50/100"), ("AYŞE KAYA", "60/100"), ("ALİ VELİ", "70/100")]
+    gui_app._scan_grade_center(
+        object(), tmp_path / "ders", "Kısa Sınav 1", tmp_path, student_rows, set(),
+    )
+
+    messages = []
+    while not gui_app.gui_queue.empty():
+        messages.append(gui_app.gui_queue.get_nowait())
+    scan_done = [p for k, p in messages if k == "scan_done"]
+    assert scan_done and scan_done[0]["fail"] == 1  # 3 ogrencinin 3'u de denenmedi
+    log_texts = [p for k, p in messages if k == "log"]
+    assert any("oturumun süresi dolmuş olabilir" in text for text in log_texts)
+
+
 def test_download_tree_page_handles_missing_output_directory(gui_app, tmp_path):
     gui_app._finish_onboarding()
     gui_app.output_dir = tmp_path / "hic-olusmamis"

@@ -564,13 +564,68 @@ def test_already_captured_titles_ignores_entries_with_missing_pdf(tmp_path, monk
     assert common.already_captured_titles() == set()
 
 
-def test_already_captured_titles_includes_entries_with_existing_pdf(tmp_path, monkeypatch):
+def test_already_captured_titles_includes_entries_with_existing_valid_pdf(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "LOG_PATH", tmp_path / "captures.json")
     real_pdf = tmp_path / "var.pdf"
-    real_pdf.write_bytes(b"%PDF-1.4")
+    real_pdf.write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
     common.append_log({"baslik": "Var Olan", "pdf": str(real_pdf)})
 
     assert common.already_captured_titles() == {"Var Olan"}
+
+
+def test_already_captured_titles_ignores_truncated_pdf(tmp_path, monkeypatch):
+    """FELAKET SENARYOSU: PDF tam yazilirken elektrik kesildi/uygulama
+    coktu - diskte YARIM bir dosya kaldi. Sadece exists() kontrol edilseydi
+    bu ogrenci 'zaten var' sayilip SONSUZA KADAR atlanir, bozuk PDF de
+    arsivde fark edilmeden kalirdi. Supheli kucuk dosya yok sayilmali ki
+    sonraki taramada ogrenci yeniden yakalansin."""
+    monkeypatch.setattr(common, "LOG_PATH", tmp_path / "captures.json")
+    truncated_pdf = tmp_path / "yarim.pdf"
+    truncated_pdf.write_bytes(b"%PDF-1.4")  # sadece 8 bayt - yarim kalmis
+    common.append_log({"baslik": "Yarım Kalan", "pdf": str(truncated_pdf)})
+
+    assert common.already_captured_titles() == set()
+
+
+def test_read_log_quarantines_corrupt_file_and_returns_empty(tmp_path, monkeypatch):
+    """FELAKET SENARYOSU: captures.json bozulmus (elle duzenleme, guc
+    kesintisi...). Eskiden RuntimeError firlatilip HER indirme denemesi
+    bastan bloke oluyordu - program, kullanici dosyayi elle bulup silene
+    kadar kalici olarak kullanilamazdi. Artik bozuk dosya SILINMEDEN
+    'captures.bozuk-*.json' adiyla kenara alinmali ve bos gecmisle devam
+    edilmeli."""
+    log_path = tmp_path / "captures.json"
+    monkeypatch.setattr(common, "LOG_PATH", log_path)
+    log_path.write_text('{"yarim": ', encoding="utf-8")  # gecersiz JSON
+
+    entries = common.read_log()
+
+    assert entries == []
+    assert not log_path.exists()  # bozuk dosya yerinde birakilmadi
+    backups = list(tmp_path.glob("captures.bozuk-*.json"))
+    assert len(backups) == 1  # ... ama SILINMEDI, kurtarilabilir yedek var
+    assert backups[0].read_text(encoding="utf-8") == '{"yarim": '
+
+    # Sonraki kayit temiz bir dosyayla sorunsuz devam etmeli.
+    common.append_log({"baslik": "Yeni Kayit"})
+    assert common.read_log() == [{"baslik": "Yeni Kayit"}]
+
+
+def test_page_on_blackboard_true_for_blackboard_and_false_for_login_page():
+    on_bb = FakePage(live_url_value="https://istinye.blackboard.com/ultra/x")
+    on_login = FakePage(live_url_value="https://login.microsoftonline.com/x")
+    broken = FakePage(live_url_exc=RuntimeError("a"), cached_url_exc=RuntimeError("b"))
+
+    assert common.page_on_blackboard(on_bb) is True
+    assert common.page_on_blackboard(on_login) is False
+    assert common.page_on_blackboard(broken) is False
+
+
+def test_sanitize_filename_preserves_emoji_and_unusual_names():
+    """ABARTI SENARYOSU: ogrenci/sinav adinda emoji ya da alisilmadik
+    karakterler - bunlar her uc isletim sisteminde de GECERLI dosya adi
+    karakterleri, temizlenmemeli ve cokme olmamali."""
+    assert common.sanitize_filename("Final 🎓 Sınavı") == "Final 🎓 Sınavı"
 
 
 def test_has_seen_onboarding_and_mark_onboarding_seen_roundtrip(tmp_path, monkeypatch):

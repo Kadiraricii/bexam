@@ -365,25 +365,64 @@ def read_log() -> list[dict]:
         # yazarken UnicodeEncodeError firlatabiliyor hem de baska makinede
         # yazilmis dosya yanlis okunabiliyordu. append_log ile ayni kodlama.
         return json.loads(LOG_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"{LOG_PATH} bozuk gorunuyor (gecersiz JSON): {exc}. "
-            "Dosyayi elle kontrol et ya da yedekleyip sil."
-        ) from exc
+    except json.JSONDecodeError:
+        # FELAKET SENARYOSU savunmasi: dosya bozuksa (elle duzenleme,
+        # guc kesintisi, disk hatasi...) eskiden burada RuntimeError
+        # firlatiliyordu - bu hata already_captured_titles/append_log
+        # uzerinden HER indirme denemesini bastan bloke ediyordu: kullanici
+        # dosyayi elle bulup silmeden program KALICI olarak kullanilamaz
+        # kaliyordu (kriptik bir "beklenmedik ic hata" mesajiyla). Simdi
+        # bozuk dosyayi SILMEDEN kenara aliyoruz (captures.bozuk-*.json -
+        # icindeki gecmis gerekirse elle kurtarilabilir) ve bos gecmisle
+        # devam ediyoruz. Bedeli: "zaten indirilmis" bilgisi kaybolur,
+        # ayni PDF'ler bir sonraki taramada yeniden uretilir (ayni dosya
+        # adlarinin uzerine yazilir) - veri KAYBI yok, sadece fazladan
+        # sure; programin tamamen kilitlenmesinden acik ara daha iyi.
+        backup_path = LOG_PATH.with_name(f"captures.bozuk-{now_stamp()}.json")
+        try:
+            LOG_PATH.replace(backup_path)
+        except OSError:
+            # Kenara alma da basarisizsa (ör. izin sorunu) elimizden
+            # geleni yapariz: bos gecmisle devam - append_log'un atomic
+            # yazimi bir sonraki kayitta dosyayi zaten bastan yazacak.
+            pass
+        return []
+
+
+# Bir PDF'in "gercekten var/gecerli" sayilmasi icin alt boyut siniri.
+# Hem capture.py'nin uretim-sonrasi kontrolunde (supheli kucuk PDF'i sil)
+# hem already_captured_titles'in "zaten yakalanmis" kararinda AYNI esik
+# kullanilir - iki taraf ayri esikler kullansaydi biri "gecerli" dedigini
+# digeri "bozuk" sayabilirdi.
+MIN_VALID_PDF_BYTES = 3000
 
 
 def already_captured_titles() -> set[str]:
-    """Halen diskte PDF'i duran, daha once yakalanmis sinav basliklari.
+    """Halen diskte GECERLI PDF'i duran, daha once yakalanmis sinav
+    basliklari.
 
     Log kaydi olsa bile karsilik gelen PDF dosyasi silinmisse bu basligi
     "yakalanmis" saymayiz, aksi halde script onu bir daha uretmez.
-    """
+
+    Sadece exists() DEGIL, boyut da kontrol ediliyor: PDF tam yazilirken
+    elektrik kesilirse/uygulama cokerse diskte YARIM (acilamayan) bir
+    dosya kalabilir - exists() ile yetinseydik o ogrenci "zaten var"
+    sayilip SONSUZA KADAR atlanir, bozuk PDF de fark edilmeden arsivde
+    kalirdi. Supheli derecede kucuk dosyalar yok sayilir, boylece bir
+    sonraki taramada o ogrenci yeniden yakalanip dosyanin uzerine
+    saglami yazilir."""
     titles = set()
     for entry in read_log():
         title = entry.get("baslik")
         pdf_path = entry.get("pdf")
-        if title and pdf_path and Path(pdf_path).exists():
-            titles.add(title)
+        if not (title and pdf_path):
+            continue
+        try:
+            if Path(pdf_path).stat().st_size >= MIN_VALID_PDF_BYTES:
+                titles.add(title)
+        except OSError:
+            # Dosya yok ya da okunamiyor - "yakalanmis" sayma.
+            continue
     return titles
 
 
@@ -533,6 +572,22 @@ def wait_for_blackboard(page, attempts: int = 6, delay_ms: int = 500) -> bool:
         except Exception:
             pass
         page.wait_for_timeout(delay_ms)
+    try:
+        return live_url(page).startswith(BASE_URL)
+    except Exception:
+        return False
+
+
+def page_on_blackboard(page) -> bool:
+    """Sayfa SU ANDA Blackboard domaininde mi - tek, anlik bir kontrol
+    (wait_for_blackboard'un aksine beklemez/tekrarlamaz).
+
+    Kullanim yeri: bir yakalama HATA verdikten sonra "oturum mu dustu?"
+    tespiti. Oturum dusunce Blackboard, login sayfasina yonlendirir ve
+    sonraki HER ogrenci de ayni sekilde basarisiz olur - devre kesicinin
+    5 hatayi tuketmesini beklemek (her biri ~10-30 sn dogrulama beklemesi)
+    sadece zaman kaybi. live_url kullanir (ham page.url degil - bkz.
+    live_url docstring'indeki SSO onbellek kopmasi)."""
     try:
         return live_url(page).startswith(BASE_URL)
     except Exception:

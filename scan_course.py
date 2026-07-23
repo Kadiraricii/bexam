@@ -36,6 +36,7 @@ from common import (
     is_browser_closed_error,
     live_url,
     load_student_roster,
+    page_on_blackboard,
     resolve_active_page,
     sanitize_filename,
 )
@@ -178,7 +179,36 @@ def find_exam_row_names(page: Page) -> tuple[list[ExamRow], list[str]]:
         # (farkli sinavlarin adlari zaten birbirinden farkli).
         if first_line and first_line not in excluded:
             excluded.append(first_line)
-    return included, excluded
+    return _dedupe_exam_rows(included, excluded)
+
+
+def _dedupe_exam_rows(included: list[ExamRow], excluded: list[str]) -> tuple[list[ExamRow], list[str]]:
+    """AYNI ada sahip birden fazla sinav satirini tekillestirir - ilki
+    islenecek listede kalir, sonrakiler ACIK bir aciklamayla elenenler
+    listesine tasinir.
+
+    Neden: capture_exam_submissions satiri ADIYLA bulup `.first`'e
+    tiklar - ayni adla iki satir varsa (hoca ayni adla iki kolon acmis,
+    YA DA ayni satir gorunur etiket + ekran-okuyucu kopyasi olarak iki
+    kez eslesmis) ikinci "sinav" da hep ILK satiri acar: ilki iki kez
+    taranir (ikincisi tamamen atlama olarak biter), IKINCI sinav ise
+    SESSIZCE hic taranmaz - kullanici fark edemezdi. Sessizce yanlis is
+    yapmak yerine ikinciyi islemeyip kullaniciya acikca soyluyoruz:
+    Blackboard'da sinavin adini gecici olarak degistirip tekrar taramasi
+    yeterli."""
+    deduped: list[ExamRow] = []
+    name_counts: dict[str, int] = {}
+    for row in included:
+        name_counts[row.name] = name_counts.get(row.name, 0) + 1
+        if name_counts[row.name] == 1:
+            deduped.append(row)
+        else:
+            excluded = excluded + [
+                f"{row.name} (aynı adla {name_counts[row.name]}. satır — hangi satıra "
+                "tıklanacağı ayırt edilemediği için taranmadı; Blackboard'da bu "
+                "sınavın adını geçici olarak değiştirip tekrar tara)"
+            ]
+    return deduped, excluded
 
 
 def return_to_grades_list(page: Page, grades_url: str, *, try_back: bool = True) -> None:
@@ -367,6 +397,17 @@ def capture_exam_submissions(
             emit(f"    HATA/gönderilmemiş: {exc}")
             totals["fail"] += 1
             consecutive_failures += 1
+            # Oturum dustuyse (sayfa login'e yonlendirildi) kalan HER
+            # ogrenci de ayni sekilde basarisiz olur - devre kesicinin
+            # 5 uzun denemeyi tuketmesini beklemek sadece zaman kaybi,
+            # hemen net bir mesajla duruyoruz.
+            if not page_on_blackboard(page):
+                emit(
+                    "  UYARI: Sayfa artık Blackboard'da görünmüyor — oturumun "
+                    "süresi dolmuş olabilir. Tarama hemen durduruldu; tekrar "
+                    "giriş yapıp taramayı tekrarla (indirilenler atlanacak)."
+                )
+                break
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 emit(
                     f"  UYARI: art arda {consecutive_failures} hata oldu, "
