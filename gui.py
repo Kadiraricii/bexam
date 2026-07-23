@@ -53,6 +53,7 @@ from common import (
     DOWNLOAD_LOG_FILENAME,
     OUTPUT_DIR,
     PROFILE_DIR,
+    STUDENT_ROSTER_CSV_FILENAME,
     already_captured_titles,
     append_download_log,
     browser_launch_kwargs,
@@ -67,6 +68,7 @@ from common import (
     is_chrome_missing_error,
     is_profile_lock_error,
     live_url,
+    load_student_roster,
     mark_onboarding_seen,
     open_in_file_manager,
     resolve_active_page,
@@ -75,8 +77,9 @@ from common import (
     wait_for_blackboard,
 )
 from scan_course import (
+    GRADING_STATUS_COMPLETE_MARKERS_LABEL,
     NotSubmittedOrNotExam,
-    capture_exam_row,
+    capture_exam_submissions,
     find_exam_row_names,
     return_to_grades_list,
 )
@@ -87,6 +90,7 @@ from scan_grade_center import (
     capture_student,
     find_student_rows,
 )
+from scan_students import find_student_roster, write_student_roster_csv
 
 # ---------- gorsel dil (renk/tipografi) ----------
 # Kullanicinin kendi belirttigi, Linear/Raycast/Notion Desktop esintili
@@ -286,7 +290,7 @@ class RoundedButton(tk.Canvas):
         if redraw:
             self._draw()
 
-    configure = config
+    configure = config  # type: ignore[assignment]
 
 
 class StatusDot(tk.Canvas):
@@ -531,10 +535,10 @@ def _format_relative_time(dt: datetime) -> str:
     minutes = int(seconds // 60)
     if minutes < 60:
         return f"{minutes} dakika önce"
-    hours = int(minutes // 60)
+    hours = minutes // 60
     if hours < 24:
         return f"{hours} saat önce"
-    days = int(hours // 24)
+    days = hours // 24
     return f"{days} gün önce"
 
 
@@ -570,6 +574,15 @@ ONBOARDING_STEPS = [
         "normal şekilde giriş yap (2FA dahil) — Blackboard oturumun hazır "
         "hale gelir.",
         "✓ Şifre gerekmez",
+    ),
+    (
+        "🎓",
+        "(Opsiyonel) Öğrenci Tara",
+        "Dersin Not Defteri > 'Öğrenciler' sekmesine git, 'Öğrenci Tara'ya "
+        "bas. Program tüm öğrencilerin adını ve numarasını bir CSV "
+        "dosyasına kaydeder — bu sayede indirilecek PDF'lerin adına "
+        "öğrenci numarası da otomatik eklenir.",
+        "✓ PDF adı: sınav_öğrenciNo_isim-soyisim",
     ),
     (
         "🔍",
@@ -616,6 +629,16 @@ NAV_ITEMS = [
 ]
 
 
+class CardFrame(tk.Frame):
+    """`_make_card`'in urettigi dis cerceve - ic dolgulu icerik alanini
+    `.inner` olarak tasir. Duz bir tk.Frame yerine bu ince alt sinif
+    kullanilarak `.inner` DECLARE edilmis bir oznitelik oluyor; aksi
+    halde her `card.inner` erisimi (dusinlerce yerde) statik tip
+    denetiminde "boyle bir oznitelik yok" hatasi veriyordu."""
+
+    inner: tk.Frame
+
+
 class BlackboardGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -640,6 +663,11 @@ class BlackboardGUI:
         self._connection_state = "disconnected"  # disconnected|connecting|connected
         self._scan_enabled = False
         self._download_enabled = False
+        # "Öğrenci Tara" (Not Defteri > Öğrenciler sekmesinden ad+numara
+        # CSV'si cikaran ayri, tek-seferlik islem) - ana tarama/indirme
+        # akisindan BAGIMSIZ ama ayni TEK Playwright worker thread'ini
+        # paylastigi icin, digerleriyle CAKISMAMASI icin kendi bayragi var.
+        self._student_scan_enabled = False
         self._timeline_stage = 0
         self._totals = {"ok": 0, "skip": 0, "fail": 0}
         self._compact_mode = False
@@ -686,16 +714,80 @@ class BlackboardGUI:
         canvas.create_text(size / 2, size / 2, text=str(number), fill="white", font=("", 14, "bold"))
         return canvas
 
-    def _make_card(self, parent: tk.Widget) -> tk.Frame:
+    def _make_card(self, parent: tk.Widget) -> CardFrame:
         """Beyaz bir 'kart' paneli olusturur - ince, sert kenarlik yerine
         ustte ince renkli bir 'aksan seridi' ile sayfa arka planindan
         ayristiriliyor. Icerik icin dondurulen frame'in kendisi degil,
         ic dolgulu `.inner` alani kullanilmali."""
-        outer = tk.Frame(parent, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
+        outer = CardFrame(parent, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
         inner = tk.Frame(outer, bg=COLOR_CARD)
         inner.pack(fill="both", expand=True, padx=20, pady=18)
         outer.inner = inner
         return outer
+
+    def _make_scrollable_area(self, parent: tk.Widget) -> tk.Frame:
+        """Dikey kaydirilabilir bir icerik alani olusturur - donen frame'e
+        normal bir Frame gibi widget eklenebilir; icerik pencereden UZUN
+        olsa bile (ör. Yardim sayfasindaki adim listesi + yeni ozellik
+        kartlari + Chrome uyarisi bir arada) disariya TASMAZ, kaydirilarak
+        gorunur. Fare tekerlegi SADECE imlec bu alanin uzerindeyken
+        dinlenir (bind_all kalici birakilirsa, sayfa degisip canvas yok
+        edildikten sonra gelecek bir tekerlek olayi TclError firlatirdi -
+        bu yuzden <Enter>/<Leave> ile ac/kapa yapiliyor).
+
+        NOT: bu, onceden onboarding ekraninda TEK KULLANIMLIK olarak
+        yazilmisti; simdi Yardim sayfasinda da AYNI ihtiyac dogunca (ayni
+        incelikli widget-yasam-dongusu mantigini IKINCI kez elle
+        kopyalamak yerine) tek, paylasilan bir yardimciya cikarildi."""
+        scroll_wrap = tk.Frame(parent, bg=COLOR_BG)
+        scroll_wrap.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(scroll_wrap, bg=COLOR_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_wrap, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        body = tk.Frame(canvas, bg=COLOR_BG)
+        window = canvas.create_window((0, 0), window=body, anchor="nw")
+
+        def _sync_scrollregion(_event=None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_body_width(event) -> None:
+            # body'yi HER ZAMAN canvas'in guncel genisligine esitle - aksi
+            # halde metinler kendi wraplength'lerine gore dar kalir ve
+            # gereksiz yatay bosluk/kaydirma olusur.
+            canvas.itemconfig(window, width=event.width)
+
+        body.bind("<Configure>", _sync_scrollregion)
+        canvas.bind("<Configure>", _sync_body_width)
+
+        def _on_mousewheel(event) -> None:
+            try:
+                if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
+                    canvas.yview_scroll(1, "units")
+                elif getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+                    canvas.yview_scroll(-1, "units")
+            except tk.TclError:
+                # Sayfa zaten degisip canvas yok edilmisken gecikmeli bir
+                # tekerlek olayi gelirse sessizce yok say.
+                pass
+
+        def _bind_mousewheel(_event=None) -> None:
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_mousewheel)
+            canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_mousewheel(_event=None) -> None:
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+
+        return body
 
     def _build_chrome_flag_notice(
         self, parent: tk.Widget, wraplength: int = 640, start_expanded: bool = False,
@@ -892,17 +984,14 @@ class BlackboardGUI:
         # Chrome bayrak uyarisi burada YOK artik - Ana Sayfa'da zaten
         # kalici olarak gosteriliyor, onboarding'de tekrarlamaya gerek yok.
 
-        # ---- Sag: adim adim akis ----
-        # Kucuk ekranlarda / pencere kuculdugunde (ör. bu bant eklenince
-        # oldugu gibi) icerik pencere yuksekligini asabiliyordu - sabit bir
-        # Frame ile bu durumda "Başla" butonu dahil alttaki her sey
-        # KIRPILIP goruntu disina cikiyordu, kullanici onboarding'i
-        # gecemeyebilirdi. Iki katmanli bir yapi kuruyoruz: "Başla" +
-        # "Bir daha gösterme" satiri ALTA SABIT kalir (her zaman gorunur),
-        # ustundeki bilgilendirici icerik (adimlar, notlar) ise Canvas +
-        # Scrollbar ile DIKEY olarak kaydirilabilir - icerik ne kadar uzun
-        # olursa olsun ana eylem butonuna ulasmak icin kaydirmaya bile
-        # gerek kalmaz.
+        # ---- Sag: TEK SEFERDE BIR ADIM gosteren sihirbaz (wizard) ----
+        # ONCEDEN butun adimlar alt alta, kaydirilabilir uzun bir listede
+        # gosteriliyordu - kullanici geri bildirimine gore bu "alt alta"
+        # gorunum kalabalik/dagınık duruyordu. Simdi TEK bir adim buyukce
+        # gosteriliyor; "Geri"/"İleri" butonlariyla VE sol/sag OK
+        # TUSLARIYLA gezinilebiliyor. Icerik artik hep TEK adim kadar
+        # (kisa) oldugu icin ayrica bir kaydirma mekanizmasina gerek
+        # kalmadi - eski tasma riski bu tasarimda yapisal olarak yok.
         right = tk.Frame(outer, bg=COLOR_BG)
         right.pack(side="left", fill="both", expand=True)
 
@@ -913,115 +1002,20 @@ class BlackboardGUI:
             bg=COLOR_BG, fg=COLOR_MUTED, activebackground=COLOR_BG,
             selectcolor=COLOR_BG, font=("", 13), highlightthickness=0, bd=0,
         ).pack(side="left")
-        RoundedButton(
-            footer, text="Başla →", command=self._finish_onboarding, kind="primary", width=150,
-        ).pack(side="right")
+        nav_row = tk.Frame(footer, bg=COLOR_BG)
+        nav_row.pack(side="right")
+        self._onboarding_prev_button = RoundedButton(
+            nav_row, text="◀ Geri", command=self._onboarding_go_prev, kind="secondary", width=110,
+        )
+        self._onboarding_prev_button.pack(side="left", padx=(0, 8))
+        self._onboarding_next_button = RoundedButton(
+            nav_row, text="İleri →", command=self._onboarding_go_next, kind="primary", width=150,
+        )
+        self._onboarding_next_button.pack(side="left")
         tk.Frame(right, bg=COLOR_BORDER, height=1).pack(side="bottom", fill="x")
 
-        scroll_wrap = tk.Frame(right, bg=COLOR_BG)
-        scroll_wrap.pack(side="top", fill="both", expand=True)
-
-        right_canvas = tk.Canvas(scroll_wrap, bg=COLOR_BG, highlightthickness=0)
-        right_scrollbar = ttk.Scrollbar(scroll_wrap, orient="vertical", command=right_canvas.yview)
-        right_canvas.configure(yscrollcommand=right_scrollbar.set)
-        right_canvas.pack(side="left", fill="both", expand=True)
-        right_scrollbar.pack(side="right", fill="y")
-
-        right_body = tk.Frame(right_canvas, bg=COLOR_BG)
-        right_body_padded = tk.Frame(right_body, bg=COLOR_BG)
-        right_body_padded.pack(fill="both", expand=True, padx=40, pady=(36, 12))
-        right_window = right_canvas.create_window((0, 0), window=right_body, anchor="nw")
-
-        def _sync_scrollregion(_event=None) -> None:
-            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
-
-        def _sync_body_width(event) -> None:
-            # right_body'yi HER ZAMAN canvas'in guncel genisligine esitle -
-            # aksi halde metinler kendi wraplength'lerine gore dar kalir ve
-            # gereksiz yatay bosluk/kaydirma olusur.
-            right_canvas.itemconfig(right_window, width=event.width)
-
-        right_body.bind("<Configure>", _sync_scrollregion)
-        right_canvas.bind("<Configure>", _sync_body_width)
-
-        def _on_mousewheel(event) -> None:
-            try:
-                if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
-                    right_canvas.yview_scroll(1, "units")
-                elif getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
-                    right_canvas.yview_scroll(-1, "units")
-            except tk.TclError:
-                # Onboarding zaten kapanip canvas yok edilmisken gecikmeli
-                # bir tekerlek olayi gelirse sessizce yok say.
-                pass
-
-        def _bind_mousewheel(_event=None) -> None:
-            right_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-            right_canvas.bind_all("<Button-4>", _on_mousewheel)
-            right_canvas.bind_all("<Button-5>", _on_mousewheel)
-
-        def _unbind_mousewheel(_event=None) -> None:
-            right_canvas.unbind_all("<MouseWheel>")
-            right_canvas.unbind_all("<Button-4>")
-            right_canvas.unbind_all("<Button-5>")
-
-        # Fare tekerlegi SADECE imlec bu alanin uzerindeyken dinlensin -
-        # bind_all() kalici olarak birakilirsa, onboarding kapandiktan
-        # sonra (canvas yok edildikten sonra) gelecek bir tekerlek olayi
-        # yok edilmis widget'a erismeye calisip TclError firlatirdi.
-        right_canvas.bind("<Enter>", _bind_mousewheel)
-        right_canvas.bind("<Leave>", _unbind_mousewheel)
-        self._onboarding_unbind_mousewheel = _unbind_mousewheel
-
-        right_body = right_body_padded
-
-        tk.Label(
-            right_body, text="Başlamadan Önce", bg=COLOR_BG, fg=COLOR_TEXT,
-            font=("", 24, "bold"), anchor="w",
-        ).pack(fill="x")
-        tk.Label(
-            right_body,
-            text="Aşağıdaki 4 basit adımı takip ederek sınavların PDF kopyalarını "
-            "kolayca alabilirsiniz.",
-            bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_SUBTITLE, anchor="w",
-        ).pack(fill="x", pady=(4, 20))
-
-        for i, (icon, title, desc, tag) in enumerate(ONBOARDING_STEPS, start=1):
-            card = self._make_card(right_body)
-            card.pack(fill="x", pady=(0, 12))
-            row = tk.Frame(card.inner, bg=COLOR_CARD)
-            row.pack(fill="x")
-
-            icon_canvas = tk.Canvas(row, width=48, height=48, bg=COLOR_CARD, highlightthickness=0)
-            icon_canvas.pack(side="left", anchor="n", padx=(0, 14))
-            icon_canvas.create_polygon(
-                _rounded_rect_points(1, 1, 47, 47, 12), smooth=True, fill=COLOR_ACCENT_SOFT, outline="",
-            )
-            icon_canvas.create_text(24, 24, text=icon, font=_emoji_font(20))
-
-            text_col = tk.Frame(row, bg=COLOR_CARD)
-            text_col.pack(side="left", fill="both", expand=True)
-            title_row = tk.Frame(text_col, bg=COLOR_CARD)
-            title_row.pack(fill="x")
-            badge = tk.Canvas(title_row, width=22, height=22, bg=COLOR_CARD, highlightthickness=0)
-            badge.pack(side="left", padx=(0, 8))
-            badge.create_oval(1, 1, 21, 21, fill=COLOR_ACCENT, outline="")
-            badge.create_text(11, 11, text=str(i), fill="white", font=("", 12, "bold"))
-            tk.Label(
-                title_row, text=title, bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_STEP_TITLE, anchor="w",
-            ).pack(side="left", fill="x", expand=True)
-            tk.Label(
-                text_col, text=desc, bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BODY,
-                anchor="w", justify="left", wraplength=560,
-            ).pack(fill="x", pady=(4, 8))
-            tag_label = tk.Label(
-                text_col, text=tag, bg=COLOR_SUCCESS_SOFT, fg=COLOR_SUCCESS,
-                font=("", 11, "bold"), padx=8, pady=3,
-            )
-            tag_label.pack(anchor="w")
-
-        info_card = tk.Frame(right_body, bg=COLOR_ACCENT_SOFT)
-        info_card.pack(fill="x", pady=(4, 16))
+        info_card = tk.Frame(right, bg=COLOR_ACCENT_SOFT)
+        info_card.pack(side="bottom", fill="x", padx=40, pady=(0, 16))
         info_inner = tk.Frame(info_card, bg=COLOR_ACCENT_SOFT)
         info_inner.pack(fill="x", padx=16, pady=12)
         tk.Label(
@@ -1034,18 +1028,134 @@ class BlackboardGUI:
             "bilgilerinize erişmez, kaydetmez.",
             bg=COLOR_ACCENT_SOFT, fg=COLOR_TEXT, font=("", 13), anchor="w",
             justify="left", wraplength=560,
-        ).pack(fill="x", pady=(4, 16))
+        ).pack(fill="x", pady=(4, 0))
+
+        content = tk.Frame(right, bg=COLOR_BG)
+        content.pack(side="top", fill="both", expand=True, padx=40, pady=(36, 12))
+
+        tk.Label(
+            content, text="Başlamadan Önce", bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("", 24, "bold"), anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            content,
+            text=f"Aşağıdaki {len(ONBOARDING_STEPS)} basit adımı takip ederek sınavların "
+            "PDF kopyalarını kolayca alabilirsiniz.",
+            bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_SUBTITLE, anchor="w",
+        ).pack(fill="x", pady=(4, 4))
+
+        self._onboarding_dots_canvas = tk.Canvas(content, height=20, bg=COLOR_BG, highlightthickness=0)
+        self._onboarding_dots_canvas.pack(fill="x", pady=(0, 16))
+
+        self._onboarding_step_container = tk.Frame(content, bg=COLOR_BG)
+        self._onboarding_step_container.pack(fill="both", expand=True)
+
+        # Klavye ok tuslariyla gezinme - onboarding kapaninca (bkz.
+        # _finish_onboarding) MUTLAKA kaldirilmali, aksi halde Ana
+        # Sayfa'dayken sol/sag ok tuslarina basildiginda bu metotlar
+        # (artik var olmayan onboarding widget'larina erismeye calisip)
+        # TclError firlatirdi.
+        self.root.bind("<Left>", self._onboarding_go_prev)
+        self.root.bind("<Right>", self._onboarding_go_next)
+
+        self._onboarding_step_index = 0
+        self._render_onboarding_step()
+
+    def _render_onboarding_step(self) -> None:
+        """Sihirbazin o an gosterilen TEK adimini (self._onboarding_step_index)
+        cizer - navigasyon butonlarina/ok tuslarina basildiginda yeniden
+        cagrilir. Onceki adimin widget'lari once temizlenir."""
+        for widget in self._onboarding_step_container.winfo_children():
+            widget.destroy()
+
+        i = self._onboarding_step_index
+        icon, title, desc, tag = ONBOARDING_STEPS[i]
+        total = len(ONBOARDING_STEPS)
+
+        card = self._make_card(self._onboarding_step_container)
+        card.pack(fill="x")
+        row = tk.Frame(card.inner, bg=COLOR_CARD)
+        row.pack(fill="x")
+
+        icon_canvas = tk.Canvas(row, width=56, height=56, bg=COLOR_CARD, highlightthickness=0)
+        icon_canvas.pack(side="left", anchor="n", padx=(0, 16))
+        icon_canvas.create_polygon(
+            _rounded_rect_points(1, 1, 55, 55, 14), smooth=True, fill=COLOR_ACCENT_SOFT, outline="",
+        )
+        icon_canvas.create_text(28, 28, text=icon, font=_emoji_font(24))
+
+        text_col = tk.Frame(row, bg=COLOR_CARD)
+        text_col.pack(side="left", fill="both", expand=True)
+        title_row = tk.Frame(text_col, bg=COLOR_CARD)
+        title_row.pack(fill="x")
+        badge = tk.Canvas(title_row, width=24, height=24, bg=COLOR_CARD, highlightthickness=0)
+        badge.pack(side="left", padx=(0, 8))
+        badge.create_oval(1, 1, 23, 23, fill=COLOR_ACCENT, outline="")
+        badge.create_text(12, 12, text=str(i + 1), fill="white", font=("", 13, "bold"))
+        tk.Label(
+            title_row, text=title, bg=COLOR_CARD, fg=COLOR_TEXT, font=("", 19, "bold"), anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        tk.Label(
+            text_col, text=desc, bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 14),
+            anchor="w", justify="left", wraplength=560,
+        ).pack(fill="x", pady=(8, 10))
+        tk.Label(
+            text_col, text=tag, bg=COLOR_SUCCESS_SOFT, fg=COLOR_SUCCESS,
+            font=("", 11, "bold"), padx=8, pady=3,
+        ).pack(anchor="w")
+
+        tk.Label(
+            self._onboarding_step_container, text=f"Adım {i + 1} / {total}",
+            bg=COLOR_BG, fg=COLOR_MUTED, font=("", 11), anchor="w",
+        ).pack(anchor="w", pady=(10, 0))
+
+        self._draw_onboarding_dots()
+        self._update_onboarding_nav_buttons()
+
+    def _draw_onboarding_dots(self) -> None:
+        """Sihirbazin ust kismindaki kucuk ilerleme noktalarini cizer -
+        su anki adim vurgulu (COLOR_ACCENT), digerleri soluk (COLOR_BORDER)."""
+        canvas = self._onboarding_dots_canvas
+        canvas.delete("all")
+        total = len(ONBOARDING_STEPS)
+        dot_radius = 4
+        gap = 18
+        for i in range(total):
+            cx = 4 + i * gap + dot_radius
+            color = COLOR_ACCENT if i == self._onboarding_step_index else COLOR_BORDER
+            canvas.create_oval(
+                cx - dot_radius, 10 - dot_radius, cx + dot_radius, 10 + dot_radius,
+                fill=color, outline="",
+            )
+
+    def _update_onboarding_nav_buttons(self) -> None:
+        is_first = self._onboarding_step_index == 0
+        is_last = self._onboarding_step_index == len(ONBOARDING_STEPS) - 1
+        self._onboarding_prev_button.config(state="disabled" if is_first else "normal")
+        self._onboarding_next_button.config(text="Başla →" if is_last else "İleri →")
+
+    def _onboarding_go_prev(self, _event=None) -> None:
+        if self._onboarding_step_index > 0:
+            self._onboarding_step_index -= 1
+            self._render_onboarding_step()
+
+    def _onboarding_go_next(self, _event=None) -> None:
+        if self._onboarding_step_index < len(ONBOARDING_STEPS) - 1:
+            self._onboarding_step_index += 1
+            self._render_onboarding_step()
+        else:
+            self._finish_onboarding()
 
     def _finish_onboarding(self) -> None:
-        # bind_all() ile SADECE fare onboarding canvas'inin uzerindeyken
-        # aktif edilen tekerlek dinleyicisini burada da kesin olarak
-        # kaldiriyoruz - "Başla" tiklandiginda imlec hala canvas
-        # uzerindeyse <Leave> hic tetiklenmeden widget'lar yok edilir,
-        # bu da kalici bir global bind birakirdi (bkz. kurulum yerindeki
-        # docstring).
-        unbind = getattr(self, "_onboarding_unbind_mousewheel", None)
-        if unbind is not None:
-            unbind()
+        # Onboarding'e ozel sol/sag ok tusu baglamalarini kaldiriyoruz -
+        # aksi halde Ana Sayfa'ya gecince de bu tuslara basildiginda (artik
+        # yok edilmis) onboarding widget'larina erismeye calisip TclError
+        # firlatirdi.
+        try:
+            self.root.unbind("<Left>")
+            self.root.unbind("<Right>")
+        except tk.TclError:
+            pass
         if self._dont_show_again_var.get():
             mark_onboarding_seen()
         self._build_app_shell()
@@ -1241,6 +1351,16 @@ class BlackboardGUI:
             kind="success", width=182,
         )
         self.download_button.pack(side="left", padx=(8, 0))
+        # "Öğrenci Tara": dersin Not Defteri > 'Öğrenciler' sekmesindeki
+        # tam ad + kullanici adi listesini CSV'ye cikarir (bkz.
+        # scan_students.py) - "Bul ve Tara"/"PDF Olarak İndir" akisindan
+        # BAGIMSIZ, ayri bir tek-seferlik islem oldugu icin "secondary"
+        # (ghost) stilde, kendi butonu olarak ayriliyor.
+        self.scan_students_button = RoundedButton(
+            action_row, text="Öğrenci Tara", command=self._scan_students_current_page,
+            kind="secondary", width=158,
+        )
+        self.scan_students_button.pack(side="left", padx=(8, 0))
 
         progress_header = tk.Frame(progress_card.inner, bg=COLOR_CARD)
         progress_header.pack(fill="x")
@@ -1425,6 +1545,7 @@ class BlackboardGUI:
         self.open_browser_button.config(state="disabled" if self._connection_state != "disconnected" else "normal")
         self.scan_button.config(state="normal" if self._scan_enabled else "disabled")
         self.download_button.config(state="normal" if self._download_enabled else "disabled")
+        self.scan_students_button.config(state="normal" if self._student_scan_enabled else "disabled")
         self.timeline.set_stage(self._timeline_stage)
         self.stat_cards["found"].set_value(len(self._pending_discovery["items"]) if self._pending_discovery else 0)
         self.stat_cards["ok"].set_value(self._totals["ok"])
@@ -1766,7 +1887,13 @@ class BlackboardGUI:
         ).pack(side="left")
 
     def _build_help_page(self, parent: tk.Widget) -> None:
-        wrapper = tk.Frame(parent, bg=COLOR_BG)
+        # Bu sayfa artik 5 adim + "Öğrenci Tara" detay karti + Chrome
+        # uyarisi bir arada barindiriyor - kucuk pencerelerde tum bunlar
+        # pencere yuksekligini asip alttaki icerik gorunmez/erisilmez
+        # kalabiliyordu (CANLI GOZLEMLENEN bir tasma). _make_scrollable_area
+        # ile sarmalayip bu riski yapisal olarak ortadan kaldiriyoruz.
+        scroll_body = self._make_scrollable_area(parent)
+        wrapper = tk.Frame(scroll_body, bg=COLOR_BG)
         wrapper.pack(fill="both", expand=True, padx=28, pady=24)
         tk.Label(
             wrapper, text="Nasıl Çalışır?", bg=COLOR_BG, fg=COLOR_TEXT, font=("", 22, "bold"), anchor="w",
@@ -1791,6 +1918,40 @@ class BlackboardGUI:
                 text_col, text=tag, bg=COLOR_SUCCESS_SOFT, fg=COLOR_SUCCESS,
                 font=("", 11, "bold"), padx=8, pady=3,
             ).pack(anchor="w")
+
+        # "Öğrenci Tara" ozelligini yukaridaki kisa adim etiketinin
+        # otesinde, somut bir ornekle (CSV formati + PDF adlandirma
+        # formati) daha derinlemesine aciklayan ayri bir kart - Yardim
+        # sayfasi zaten detay almaya gelinen bir sayfa oldugu icin burada
+        # onboarding'deki kisa versiyondan daha fazla bilgi vermek mantikli.
+        feature_card = self._make_card(wrapper)
+        feature_card.pack(fill="x", pady=(6, 10))
+        tk.Label(
+            feature_card.inner, text="📊  Öğrenci Numaralı PDF Adları",
+            bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_STEP_TITLE, anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            feature_card.inner,
+            text="'Öğrenci Tara' bir kez çalıştırıldığında, dersin tüm "
+            "öğrencilerinin adı ve numarası bir CSV dosyasına kaydedilir. "
+            "Bu liste var olduğu sürece, o dersteki tüm sınav PDF'lerinin "
+            "adına öğrenci numarası otomatik olarak eklenir — elle "
+            "eşleştirme gerekmez.",
+            bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            justify="left", wraplength=680,
+        ).pack(fill="x", pady=(4, 10))
+        example_box = tk.Frame(
+            feature_card.inner, bg="#fbfcfe", highlightbackground=COLOR_BORDER, highlightthickness=1,
+        )
+        example_box.pack(fill="x")
+        tk.Label(
+            example_box,
+            text="CSV sütunları:  Ad Soyad ; Öğrenci Numarası\n"
+            "PDF adı formatı:  {sınav_adı}_{öğrenci_no}_{İsim-Soyisim}.pdf\n"
+            "Örnek:  Kısa Sınav 1_2420171019_Ahmet-Yılmaz.pdf",
+            bg="#fbfcfe", fg=COLOR_TEXT, font=("", 12), anchor="w",
+            justify="left", wraplength=650, padx=12, pady=10,
+        ).pack(fill="x")
 
         # Yardim sayfasi zaten "nasil calisir" bilgisi almaya gelinen bir
         # sayfa - burada kucuk/kapali baslamanin bir faydasi yok, direkt
@@ -1973,6 +2134,30 @@ class BlackboardGUI:
                                 else:
                                     raise
 
+                    elif command == "scan_students":
+                        try:
+                            active_page = resolve_active_page(context) or page
+                        except Exception:
+                            active_page = page
+                        # bkz. "discover" kolundaki ayni kontrolun docstring'i.
+                        if active_page is None:
+                            self.gui_queue.put((
+                                "log",
+                                "Tarayıcı bağlantısı yok görünüyor - önce "
+                                "'Tarayıcıyı Aç'a bas.",
+                            ))
+                            self.gui_queue.put(("student_scan_done", None))
+                            continue
+                        try:
+                            self._scan_students(active_page, payload)
+                        except Exception as exc:
+                            if is_browser_closed_error(exc):
+                                context = None
+                                page = None
+                                self.gui_queue.put(("browser_lost", None))
+                            else:
+                                raise
+
                     elif command == "download":
                         try:
                             active_page = resolve_active_page(context) or page
@@ -2040,6 +2225,69 @@ class BlackboardGUI:
                     # gerek yok, worker thread temiz sekilde sonlansin.
                     pass
 
+    def _scan_students(self, page: Page, output_dir: Path) -> None:
+        """Dersin Not Defteri > 'Öğrenciler' sekmesindeki tam ad + kullanici
+        adi listesini tarayip CSV'ye yazar (bkz. scan_students.py) - bu
+        listeyi ANA tarama/indirme akisi (capture_student) sonradan PDF
+        adina ogrenci numarasi eklemek icin okur (bkz.
+        common.load_student_roster/format_student_pdf_stem). Kullanicinin
+        o an gercekten 'Öğrenciler' sekmesinde olmasi GEREKIYOR - bu
+        fonksiyon hangi sekmede oldugunu kendisi kontrol ETMEZ (scan_students.
+        find_student_roster de etmiyor), sadece gorunen tabloyu okur.
+
+        Sonuc, _scan_not_defteri/_scan_grade_center ile AYNI mekanizmayla
+        (append_download_log) indirme_log.txt'ye de kaydedilir - bu
+        fonksiyon HER ZAMAN dosyanin SONUNA EKLER, var olan gecmisin
+        UZERINE YAZMAZ (bkz. o fonksiyonun docstring'i, "a" - append -
+        modunda aciyor), bu yuzden farkli derslerin/farkli taramalarin
+        kayitlari zaman icinde birikerek kalir, birbirini SILMEZ."""
+        if not wait_for_blackboard(page):
+            self.gui_queue.put((
+                "log",
+                "Şu anda Blackboard sayfasında değilsin (birkaç saniye "
+                f"boyunca kontrol edildi). Şu an: {live_url(page)}\n"
+                "Tarayıcıda önce Blackboard'a gerçekten giriş yaptığından "
+                "emin ol, sonra tekrar dene.",
+            ))
+            self.gui_queue.put(("student_scan_done", None))
+            return
+
+        course_label = derive_course_label(page)
+        course_dir = output_dir / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
+
+        session_lines: list[str] = []
+
+        def emit(message: str) -> None:
+            self.gui_queue.put(("log", message))
+            session_lines.append(message)
+
+        emit(f"'{course_label}' için öğrenci listesi taranıyor...")
+        # find_student_roster, sayfalama sirasinda beklenenden az ogrenci
+        # toplanirsa bu emit ile UYARI verir (bkz. o fonksiyonun
+        # docstring'i) - hem GUI log paneline hem indirme_log.txt'ye
+        # dussun diye ayni emit'i kullaniyoruz.
+        roster = find_student_roster(page, emit=emit)
+        if not roster:
+            emit(
+                "Hiç öğrenci satırı bulunamadı. Dersin Not Defteri > "
+                "'Öğrenciler' sekmesinde olduğundan emin ol."
+            )
+            append_download_log(
+                output_dir, f"{course_label} — Öğrenci Tara", session_lines,
+                {"ok": 0, "skip": 0, "fail": 0},
+            )
+            self.gui_queue.put(("student_scan_done", None))
+            return
+
+        csv_path = course_dir / STUDENT_ROSTER_CSV_FILENAME
+        write_student_roster_csv(roster, csv_path)
+        emit(f"{len(roster)} öğrenci bulundu. CSV yazıldı: {csv_path}")
+        append_download_log(
+            output_dir, f"{course_label} — Öğrenci Tara", session_lines,
+            {"ok": len(roster), "skip": 0, "fail": 0},
+        )
+        self.gui_queue.put(("student_scan_done", {"count": len(roster), "path": str(csv_path)}))
+
     def _discover(self, page: Page, output_dir: Path) -> None:
         """Sadece sayfayi tarayip NE bulundugunu bildirir - henuz indirmez.
         Bulunanlar self._pending_discovery olarak GUI tarafinda saklanip
@@ -2061,21 +2309,33 @@ class BlackboardGUI:
         course_label = derive_course_label(page)
         course_dir = output_dir / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
 
-        exam_names = find_exam_row_names(page)
-        if exam_names:
-            listed = "\n".join(f"  - {name}" for name in exam_names)
+        exam_rows, excluded_exam_names = find_exam_row_names(page)
+        if exam_rows:
+            listed = "\n".join(f"  - {er.name}" for er in exam_rows)
+            excluded_note = ""
+            if excluded_exam_names:
+                excluded_note = (
+                    f"\n{len(excluded_exam_names)} satır atlandı (durumu "
+                    f"{GRADING_STATUS_COMPLETE_MARKERS_LABEL} değil, ör. 'Not "
+                    f"verilecek bir şey yok'): {', '.join(excluded_exam_names)}"
+                )
             self.gui_queue.put((
                 "log",
                 f"'Not Defteri' sayfası algılandı ({course_label}): "
-                f"{len(exam_names)} satır bulundu (hangileri gerçek sınav/quiz "
-                f"gönderimi, indirirken içeriğine bakılarak anlaşılacak):\n{listed}",
+                f"{len(exam_rows)} satır {GRADING_STATUS_COMPLETE_MARKERS_LABEL} "
+                f"durumunda bulundu, bunlar indirilecek:\n{listed}{excluded_note}",
             ))
             self.gui_queue.put(("discovery_done", {
                 "kind": "not_defteri",
                 "course_label": course_label,
                 "course_dir": course_dir,
                 "output_dir": output_dir,
-                "items": exam_names,
+                "items": exam_rows,
+                # Indirme basladiginda sayfanin HALA bu adres oldugu
+                # dogrulanacak (bkz. _start_download) - kullanici kesif ile
+                # indirme arasinda baska sayfaya gectiyse yanlis sayfadan
+                # indirme baslamasin.
+                "url": live_url(page),
             }))
             return
 
@@ -2091,6 +2351,8 @@ class BlackboardGUI:
                 "exam_label": exam_label,
                 "output_dir": output_dir,
                 "items": student_rows,
+                # bkz. yukaridaki not_defteri payload'indaki ayni alanin notu.
+                "url": live_url(page),
             }))
             return
 
@@ -2103,6 +2365,29 @@ class BlackboardGUI:
         self.gui_queue.put(("discovery_failed", None))
 
     def _start_download(self, page: Page, discovery: dict) -> None:
+        # Iki-faktorlu koruma: "Bul ve Tara" ile "PDF Olarak İndir" arasinda
+        # kullanici tarayicida BASKA bir sayfaya gecmis olabilir (yuksek
+        # olasilikli bir kullanici hatasi). Kesif sirasindaki adres ile su
+        # anki adres uyusmuyorsa indirmeye HIC baslamiyoruz - aksi halde
+        # tarama yanlis sayfada satir/ogrenci arayip ya kafa karistirici
+        # hatalarla dolar ya da (daha kotusu) yanlis derse ait icerik
+        # yanlis klasore inerdi.
+        expected_url = discovery.get("url") or ""
+        try:
+            current_url = live_url(page)
+        except Exception:
+            current_url = ""
+        if expected_url and current_url and current_url != expected_url:
+            self.gui_queue.put((
+                "log",
+                "Sayfa, 'Bul ve Tara' yapıldığı andakinden farklı görünüyor:\n"
+                f"  taranan: {expected_url}\n  şimdiki: {current_url}\n"
+                "Yanlış sayfadan indirme riskine karşı işlem başlatılmadı — "
+                "indirmek istediğin sayfaya dönüp tekrar 'Bul ve Tara'ya bas.",
+            ))
+            self.gui_queue.put(("discovery_failed", None))
+            return
+
         write_error = check_output_writable(discovery["output_dir"])
         if write_error:
             self.gui_queue.put(("log", write_error))
@@ -2130,7 +2415,7 @@ class BlackboardGUI:
             )
 
     def _scan_not_defteri(
-        self, page, course_label, course_dir, output_dir, exam_names, captured_titles
+        self, page, course_label, course_dir, output_dir, exam_rows, captured_titles
     ) -> None:
         session_lines: list[str] = []
 
@@ -2139,7 +2424,7 @@ class BlackboardGUI:
             session_lines.append(message)
 
         def recover(grades_url: str) -> bool:
-            """Bir satir denemesinden sonra Not Defteri listesine donmeyi
+            """Bir sinav denemesinden sonra Not Defteri listesine donmeyi
             dener. BASARISIZ olursa devam ETMEK, sayfa artik listede
             olmadigi icin BIR SONRAKI satiri (belki gercek bir sinavi)
             yanlis/bozuk bir sayfa durumundan tiklamaya calisip zincirleme
@@ -2164,32 +2449,40 @@ class BlackboardGUI:
         grades_url = live_url(page)
         totals = {"ok": 0, "skip": 0, "fail": 0}
         consecutive_failures = 0
-        for index, row_name in enumerate(exam_names):
+        for index, exam_row in enumerate(exam_rows):
             if self._stop_event.is_set():
                 emit("Kullanıcı isteğiyle durduruldu.")
                 break
 
-            # Ders adi dahil (bkz. scan_course.capture_exam_row docstring):
-            # iki farkli dersin ayni isimli sinavi birbirini "zaten
-            # yakalanmis" sanip SESSIZCE ATLAMASIN diye.
-            log_key = f"{course_label} - {row_name}"
-            if log_key in captured_titles:
-                emit(f"[{index + 1}/{len(exam_names)}] {row_name} — atlandı (zaten var)")
-                totals["skip"] += 1
-                continue
-            self._emit_progress(index + 1, len(exam_names), totals)
-            emit(f"[{index + 1}/{len(exam_names)}] {row_name}")
+            self._emit_progress(index + 1, len(exam_rows), totals)
+            emit(f"[{index + 1}/{len(exam_rows)}] {exam_row.name}")
             try:
-                exam_dir = course_dir / sanitize_filename(row_name, max_chars=DEFAULT_FOLDER_MAX_CHARS)
-                entry = capture_exam_row(page, row_name, grades_url, exam_dir, log_title=log_key)
-                emit(f"  OK  onay={entry['onay']}  puan={entry['puan']}")
-                if entry["bozuk_gorsel_sayisi"] > 0:
-                    emit(
-                        f"  UYARI  {entry['bozuk_gorsel_sayisi']} görsel bozuk/eksik "
-                        "görünüyor, PDF'i elle kontrol et."
-                    )
-                totals["ok"] += 1
+                exam_dir = course_dir / sanitize_filename(
+                    exam_row.name, max_chars=DEFAULT_FOLDER_MAX_CHARS
+                )
+                # capture_exam_submissions bu sinavdaki SOL 'Ogrenciler'
+                # panelindeki TUM ogrencileri tek tek yakalar (tek bir
+                # ogrenciyle sinirli degil) - bkz. o fonksiyonun docstring'i.
+                exam_totals = capture_exam_submissions(
+                    page,
+                    exam_row.name,
+                    grades_url,
+                    exam_dir,
+                    course_label,
+                    exam_row.expected_submitted,
+                    captured_titles,
+                    emit=emit,
+                    should_stop=self._stop_event.is_set,
+                )
+                totals["ok"] += exam_totals["ok"]
+                totals["skip"] += exam_totals["skip"]
+                totals["fail"] += exam_totals["fail"]
                 consecutive_failures = 0
+                if exam_totals["navigation_lost"]:
+                    # capture_exam_submissions zaten bir UYARI log'ladi -
+                    # sayfa bilinmeyen bir durumda, bir sonraki sinava
+                    # GECMEK yanlis satirlara tiklama riski tasir.
+                    break
             except NotSubmittedOrNotExam:
                 # Bu satir bir sinav/quiz degilmis (odev, tartisma vb.) ya
                 # da hic gonderilmemis - bu bir HATA degil, gercek bir
@@ -2240,6 +2533,10 @@ class BlackboardGUI:
             session_lines.append(message)
 
         exam_dir = course_dir / sanitize_filename(exam_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
+        # Bu akista (kind='grade_center') Not Defteri baglami yok -
+        # 'Öğrenci Tara' ile uretilmis roster'i (varsa) course_dir'den
+        # okumaya calisiyoruz (bkz. common.load_student_roster).
+        roster = load_student_roster(course_dir)
         name_occurrence: dict[str, int] = {}
         consecutive_failures = 0
         totals = {"ok": 0, "skip": 0, "fail": 0}
@@ -2253,17 +2550,22 @@ class BlackboardGUI:
             name_occurrence[raw_name] = occurrence
             display_name = raw_name if occurrence == 1 else f"{raw_name} ({occurrence})"
 
+            # Ilerleme, atlanan (zaten var) ogrenciler icin de bildirilmeli -
+            # aksi halde cogu ogrencisi onceden indirilmis bir tekrar
+            # taramada cubuk uzun sure 0'da donmus gibi gorunuyordu.
+            self._emit_progress(row_index + 1, len(student_rows), totals)
+
             log_key = f"{exam_label} - {display_name}"
             if log_key in captured_titles:
                 emit(f"[{row_index + 1}/{len(student_rows)}] {display_name} — atlandı (zaten var)")
                 totals["skip"] += 1
                 continue
 
-            self._emit_progress(row_index + 1, len(student_rows), totals)
             emit(f"[{row_index + 1}/{len(student_rows)}] {display_name}")
             try:
                 entry = capture_student(
-                    page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label
+                    page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
+                    exam_name=exam_label, roster=roster,
                 )
                 emit(f"  OK  onay={entry['onay']}  puan={entry['puan']}")
                 if entry["bozuk_gorsel_sayisi"] > 0:
@@ -2337,8 +2639,10 @@ class BlackboardGUI:
                 self.status_text.config(text="bağlı")
                 self.open_browser_button.config(state="disabled")
             self._scan_enabled = True
+            self._student_scan_enabled = True
             if self._on_home_page():
                 self.scan_button.config(state="normal")
+                self.scan_students_button.config(state="normal")
             self._timeline_stage = 1
             if self._on_home_page():
                 self.timeline.set_stage(1)
@@ -2395,7 +2699,9 @@ class BlackboardGUI:
                 )
         elif kind == "discovery_done":
             self._pending_discovery = payload
+            self._scan_enabled = True
             self._download_enabled = True
+            self._student_scan_enabled = True
             self._timeline_stage = 2
             count = len(payload["items"])
             self._log(f"Hazır: {count} öğe bulundu. İndirmek için 'PDF Olarak İndir'e bas.\n")
@@ -2405,6 +2711,7 @@ class BlackboardGUI:
                 self.progress_count_label.config(text=f"0 / {count} öğe")
                 self.scan_button.config(state="normal")
                 self.download_button.config(state="normal")
+                self.scan_students_button.config(state="normal")
                 self.timeline.set_stage(2)
                 self.stat_cards["found"].set_value(count)
                 self._refresh_discovery_panel()
@@ -2414,10 +2721,13 @@ class BlackboardGUI:
                 self.compact_counts_label.config(text=f"0 / {count} öğe")
         elif kind == "discovery_failed":
             self._pending_discovery = None
+            self._scan_enabled = self._connection_state == "connected"
             self._download_enabled = False
+            self._student_scan_enabled = self._connection_state == "connected"
             if self._on_home_page():
-                self.scan_button.config(state="normal")
+                self.scan_button.config(state="normal" if self._scan_enabled else "disabled")
                 self.download_button.config(state="disabled")
+                self.scan_students_button.config(state="normal" if self._student_scan_enabled else "disabled")
                 self._refresh_discovery_panel()
         elif kind == "browser_lost":
             # Tarayici/sekme kapanmis/coktu - ya aktif bir tarama sirasinda
@@ -2437,6 +2747,7 @@ class BlackboardGUI:
             self._connection_state = "disconnected"
             self._scan_enabled = False
             self._download_enabled = False
+            self._student_scan_enabled = False
             self._pending_discovery = None
             if self._on_home_page():
                 self.status_dot.set_state("disconnected")
@@ -2444,15 +2755,34 @@ class BlackboardGUI:
                 self.open_browser_button.config(state="normal")
                 self.scan_button.config(state="disabled")
                 self.download_button.config(state="disabled")
+                self.scan_students_button.config(state="disabled")
                 self._refresh_system_status()
                 self._refresh_discovery_panel()
             self._apply_compact_tracked_state()
+        elif kind == "student_scan_done":
+            # bkz. _scan_students_current_page'in kapattigi ayni ucunu
+            # burada geri aciyoruz - tarayici bu arada kapanmis olabilir
+            # (browser_lost bu mesajdan ONCE gelip baglantiyi sifirlamis
+            # olur), o durumda tekrar acmak yanlis olur.
+            self._scan_enabled = self._connection_state == "connected"
+            self._download_enabled = self._connection_state == "connected" and bool(self._pending_discovery)
+            self._student_scan_enabled = self._connection_state == "connected"
+            if self._on_home_page():
+                self.scan_button.config(state="normal" if self._scan_enabled else "disabled")
+                self.download_button.config(state="normal" if self._download_enabled else "disabled")
+                self.scan_students_button.config(state="normal" if self._student_scan_enabled else "disabled")
         elif kind == "scan_done":
             totals = payload or {"ok": 0, "skip": 0, "fail": 0}
             self._totals = totals
             self._timeline_stage = 4
             self._pending_discovery = None
+            # Tarama sirasinda tarayici kapandiysa "browser_lost" bu
+            # mesajdan ONCE islenip baglantiyi sifirlamis olur - o durumda
+            # "Bul ve Tara"yi yeniden acmak yanlis olurdu (tiklanirsa
+            # tarayicisiz bir komut kuyruga girer).
+            self._scan_enabled = self._connection_state == "connected"
             self._download_enabled = False
+            self._student_scan_enabled = self._connection_state == "connected"
             self._log("--- indirme bitti ---\n")
             if self._on_home_page():
                 self.progress_bar.set_progress(1.0)
@@ -2460,8 +2790,9 @@ class BlackboardGUI:
                 self.stat_cards["ok"].set_value(totals["ok"])
                 self.stat_cards["skip"].set_value(totals["skip"])
                 self.stat_cards["fail"].set_value(totals["fail"])
-                self.scan_button.config(state="normal")
+                self.scan_button.config(state="normal" if self._scan_enabled else "disabled")
                 self.download_button.config(state="disabled")
+                self.scan_students_button.config(state="normal" if self._student_scan_enabled else "disabled")
                 self.timeline.set_stage(4)
                 self._refresh_discovery_panel()
             if self._compact_mode:
@@ -2502,7 +2833,20 @@ class BlackboardGUI:
     def _discover_current_page(self) -> None:
         self.scan_button.config(state="disabled")
         self.download_button.config(state="disabled")
+        # scan_students_button de kapatiliyor: worker TEK bir Playwright
+        # thread'i - "Öğrenci Tara" bu tarama surerken tiklanirsa komut
+        # kuyruga girer ama tarama BITTIKTEN SONRA, o an sayfa artik
+        # farkli bir yerde olabilir - yanlis sayfanin ogrenci listesini
+        # tarama riskine karsi, bir islem surerken digerleri kapali.
+        self.scan_students_button.config(state="disabled")
+        # Sadece gorsel durum degil, BAYRAK da guncellenmeli: tarama
+        # surerken kullanici baska sayfaya gecip Ana Sayfa'ya donerse
+        # _apply_tracked_state butonlari bu bayraklara gore yeniden
+        # kuruyor - bayrak True kalirsa dugme yeniden tiklanabilir olup
+        # ayni komut kuyruga IKINCI kez eklenebilirdi.
+        self._scan_enabled = False
         self._download_enabled = False
+        self._student_scan_enabled = False
         self._pending_discovery = None
         self._refresh_discovery_panel()
         self.progress_bar.set_progress(0.0)
@@ -2513,12 +2857,44 @@ class BlackboardGUI:
     def _start_download_pending(self) -> None:
         if not self._pending_discovery:
             return
+        # Kesif ile indirme arasinda kullanici cikti klasorunu degistirmis
+        # olabilir - payload'daki yollar kesif ANINDAKI klasore gore
+        # hesaplanmisti. Guncellemezsek PDF'ler kullanicinin az once
+        # birakip degistirdigi ESKI klasore inerdi (sessiz ve kafa
+        # karistirici). Ders klasoru adi ayni kaldigi icin sadece koku
+        # yeni secilen klasore tasimak yeterli.
+        if self._pending_discovery.get("output_dir") != self.output_dir:
+            updated = dict(self._pending_discovery)
+            updated["course_dir"] = self.output_dir / updated["course_dir"].name
+            updated["output_dir"] = self.output_dir
+            self._pending_discovery = updated
         self.scan_button.config(state="disabled")
         self.download_button.config(state="disabled")
+        self.scan_students_button.config(state="disabled")
+        # bkz. _discover_current_page'deki ayni not: bayraklar da
+        # kapatilmazsa, indirme surerken sayfa degistirip donen kullanici
+        # icin butonlar yeniden aktif olur ve AYNI indirme kuyruga ikinci
+        # kez eklenebilirdi.
+        self._scan_enabled = False
+        self._download_enabled = False
+        self._student_scan_enabled = False
         self._timeline_stage = 3
         self.timeline.set_stage(3)
         self._log("İndiriliyor...")
         self.command_queue.put(("download", self._pending_discovery))
+
+    def _scan_students_current_page(self) -> None:
+        self.scan_button.config(state="disabled")
+        self.download_button.config(state="disabled")
+        self.scan_students_button.config(state="disabled")
+        # bkz. _discover_current_page'deki ayni not - tek Playwright
+        # worker'ini paylasan diger iki islemle CAKISMAMASI icin hepsi
+        # birlikte kapatilip islem bitince birlikte geri acilir.
+        self._scan_enabled = False
+        self._download_enabled = False
+        self._student_scan_enabled = False
+        self._log("Öğrenci listesi taranıyor...")
+        self.command_queue.put(("scan_students", self.output_dir))
 
     def _check_tracked_url(self) -> None:
         self.command_queue.put(("check_url", None))

@@ -226,14 +226,33 @@ def capture_current_page(
     page: Page,
     output_dir: Path = OUTPUT_DIR,
     filename_stem: str | None = None,
+    filename: str | None = None,
+    filename_protect_suffix_chars: int = 0,
     log_title: str | None = None,
 ) -> dict:
     """Mevcut sayfayi PDF'e cevirir ve ONAY/GONDERIM TARIHI bilgisini kaydeder.
 
     filename_stem verilirse dosya adi icin sayfadan tahmin edilen baslik
-    yerine bu kullanilir (ornegin hoca gorunumunde ogrenci adi). log_title
-    verilmezse filename_stem, o da yoksa sayfadan tahmin edilen baslik
-    captures.json'daki 'baslik' alanina yazilir.
+    yerine bu kullanilir (ornegin hoca gorunumunde ogrenci adi), ama
+    sonuna HALA '_{ONAY kodu}' eklenir (bkz. asagidaki pdf_path).
+
+    filename verilirse (filename_stem'den FARKLI OLARAK) TAM dosya adi
+    olarak KENDISI kullanilir - ONAY koduna eklenmez, cagiran taraf
+    (ör. scan_grade_center.capture_student) istedigi TAM adlandirma
+    semasini (ör. 'sinav_ogrenciNo_ad-soyad') kendisi olusturur.
+    filename verilmisse filename_stem GOZ ARDI EDILIR.
+
+    filename_protect_suffix_chars: filename verildiginde, Windows MAX_PATH
+    kirpmasi (ensure_safe_full_path) gerekirse dosya adinin SONUNDAKI bu
+    kadar karakter korunur - ogrenci PDF'lerinde sondaki
+    '_{ogrenci_no}_{ad-soyad}' kimlik bolumu kirpilip iki farkli
+    ogrencinin ayni dosya adina dusmesini (birinin PDF'inin sessizce
+    ezilmesini) onlemek icin (bkz.
+    common.student_pdf_identity_suffix_chars).
+
+    log_title verilmezse filename_stem, o da yoksa sayfadan tahmin edilen
+    baslik captures.json'daki 'baslik' alanina yazilir (filename, dedup
+    icin KULLANILMAZ - o hep log_title/filename_stem'e bagli kalir).
 
     Kaydirma AUTO_SCROLL_MAX_ITERATIONS icinde sabitlenmezse (yani icerik
     hala buyumeye devam ederken sure dolduysa), sayfa muhtemelen eksik
@@ -292,16 +311,29 @@ def capture_current_page(
 
         output_dir.mkdir(parents=True, exist_ok=True)
         stamp = now_stamp()
-        title_part = sanitize_filename(filename_stem or info["baslik"] or "sinav")
-        onay_part = info["onay"] or stamp
-        pdf_path = output_dir / f"{title_part}_{onay_part}.pdf"
-        # Windows'ta TAM YOL (klasorler dahil) 260 karakteri gecerse dosya
-        # yazma sessizce/anlasilmaz sekilde basarisiz olabiliyor (uzun yol
-        # destegi cogu makinede varsayilan KAPALI). Cikti klasoru derin bir
-        # yerdeyse (ör. OneDrive senkron yolu) bile guvende kalmak icin
-        # dosya adini proaktif olarak kisaltiyoruz - ONAY kodu (kimlik
-        # belirleyici kisim) HER ZAMAN korunuyor, sadece basliktan kirpilir.
-        pdf_path = ensure_safe_full_path(pdf_path, protect_suffix_chars=len(onay_part) + 1)
+        if filename:
+            # Tam adlandirma cagiran tarafta belirlendi - ONAY koduna
+            # ekLENMIYOR (bkz. fonksiyon docstring'i), sadece guvenli
+            # dosya adi karakterlerine ceviriyoruz. onay_part BURADA
+            # HESAPLANMIYOR/KULLANILMIYOR - asagidaki else dalindan
+            # farkli olarak bu isim zaten kimlik belirleyici (sinav +
+            # ogrenci no + ad-soyad) bilgiyi tasiyor, ONAY koduna ayrica
+            # ihtiyac yok.
+            pdf_path = output_dir / f"{sanitize_filename(filename)}.pdf"
+            pdf_path = ensure_safe_full_path(
+                pdf_path, protect_suffix_chars=filename_protect_suffix_chars
+            )
+        else:
+            title_part = sanitize_filename(filename_stem or info["baslik"] or "sinav")
+            onay_part = info["onay"] or stamp
+            pdf_path = output_dir / f"{title_part}_{onay_part}.pdf"
+            # Windows'ta TAM YOL (klasorler dahil) 260 karakteri gecerse dosya
+            # yazma sessizce/anlasilmaz sekilde basarisiz olabiliyor (uzun yol
+            # destegi cogu makinede varsayilan KAPALI). Cikti klasoru derin bir
+            # yerdeyse (ör. OneDrive senkron yolu) bile guvende kalmak icin
+            # dosya adini proaktif olarak kisaltiyoruz - ONAY kodu (kimlik
+            # belirleyici kisim) HER ZAMAN korunuyor, sadece basliktan kirpilir.
+            pdf_path = ensure_safe_full_path(pdf_path, protect_suffix_chars=len(onay_part) + 1)
 
         try:
             page.pdf(path=str(pdf_path), format="A4", print_background=True)

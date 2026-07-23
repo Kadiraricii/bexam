@@ -45,10 +45,15 @@ from common import (
     already_captured_titles,
     browser_launch_kwargs,
     derive_course_label,
+    exact_line_pattern,
     extract_page_info,
+    format_student_pdf_stem,
+    load_student_roster,
+    normalize_roster_name,
     normalize_score,
     resolve_active_page,
     sanitize_filename,
+    student_pdf_identity_suffix_chars,
 )
 
 STUDENT_ROW_SCORE_PATTERN = re.compile(r"\d+([.,]\d+)?\s*/\s*\d+([.,]\d+)?")
@@ -177,7 +182,12 @@ def find_student_rows(page: Page) -> list[tuple[str, str]]:
     for _ in range(200):  # cok uzun listeler icin ust sinir
         scroll_handle.evaluate("el => { el.scrollTop = el.scrollTop + el.clientHeight * 0.8; }")
         page.wait_for_timeout(200)
-        seen_order.extend(collect_visible_rows_in_container(scroll_handle))
+        # extend DEGIL, ortusme-birlestirme: pencereler ustuste biner,
+        # duz eklemek ayni ogrencileri blok halinde tekrarlatirdi (bkz.
+        # _merge_scroll_window docstring'i).
+        seen_order = _merge_scroll_window(
+            seen_order, collect_visible_rows_in_container(scroll_handle)
+        )
 
         # Kaydirma sinirina ulasilip ulasilmadigini scrollTop'a bakarak anlariz.
         at_bottom = scroll_handle.evaluate(
@@ -188,24 +198,51 @@ def find_student_rows(page: Page) -> list[tuple[str, str]]:
 
     scroll_handle.evaluate("el => { el.scrollTop = 0; }")
     page.wait_for_timeout(200)
+    return seen_order
 
-    # Gorunen pencereler cakisabilecegi icin, ardisik tekrarlari sadeleştir:
-    # ayni isim + ayni skor arka arkaya birden fazla kez gelmis olabilir,
-    # ama farkli konumlardaki gercek duplicate isimleri KORUMAMIZ lazim.
-    # Basit ve guvenli yaklasim: art arda birebir ayni satir tekrarini at.
-    deduped: list[tuple[str, str]] = []
-    for row in seen_order:
-        if not deduped or deduped[-1] != row:
-            deduped.append(row)
-    return deduped
+
+def _merge_scroll_window(accumulated: list[tuple[str, str]], window: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Kaydirma sirasinda toplanan yeni pencereyi, o ana kadar birikmis
+    listeyle CAKISMA PAYINI DUSEREK birlestirir: birikmis listenin SONU
+    ile yeni pencerenin BASI ayni diziyse (en buyuk ortusme), sadece
+    pencerenin kalan (yeni) kismi eklenir.
+
+    Neden: eski yaklasim ("art arda birebir ayni satiri at") SADECE
+    bitisik tekrarlari yakaliyordu - oysa kaydirma pencereleri ustuste
+    biner (her adimda %80 kaydiriliyor, %20 ortusme kalir) ve liste
+    virtualized DEGILSE her pasta TUM liste yeniden toplanir. Iki durumda
+    da tekrarlar bitisik degil BLOK halinde gelir (ör. A,B,C,D + C,D,E,F)
+    ve eski sadelestirme onlari YAKALAYAMAZDI - ayni ogrenci listeye 2+
+    kez girip sahte '(2)' kopya PDF'leri, sisik sayimlar ve bosa gecen
+    tarama suresi uretirdi. Ortusme birlestirmesi hem bu blok tekrarlarini
+    dogru eler hem de listenin FARKLI konumlarindaki gercek ayni-isimli
+    ogrencileri (ortusme disinda kaldiklari icin) korur."""
+    if not accumulated:
+        return list(window)
+    if not window:
+        return accumulated
+    max_overlap = min(len(accumulated), len(window))
+    for overlap in range(max_overlap, 0, -1):
+        if accumulated[-overlap:] == window[:overlap]:
+            return accumulated + window[overlap:]
+    return accumulated + window
 
 
 def header_matches_student(body_text: str, student_name: str) -> bool:
+    """GONDERIM TARIHI blogunun hemen ustundeki pencere icinde ogrenci
+    adinin gectigini dogrular.
+
+    Duz `student_name in window` (substring) KULLANILMIYOR: 'AYŞE KAYA'
+    aranirken sayfada aslinda 'AYŞE KAYAALP' yaziyorsa substring kontrol
+    YANLIS POZITIF verirdi - yani yanlis ogrencinin sayfasi 'dogrulandi'
+    sayilip YANLIS icerik YANLIS isimle PDF'lenebilirdi. Adin iki yaninda
+    baska bir harf/rakam OLMAMASINI sart kosuyoruz (Turkce harfler de \\w
+    kapsaminda oldugu icin 'KAYAALP' icindeki 'KAYA' artik eslesmez)."""
     idx = body_text.find(SUBMIT_DATE_MARKER)
     if idx == -1:
         return False
     window = body_text[max(0, idx - HEADER_WINDOW_CHARS):idx]
-    return student_name in window
+    return re.search(rf"(?<!\w){re.escape(student_name)}(?!\w)", window) is not None
 
 
 def capture_student(
@@ -216,6 +253,9 @@ def capture_student(
     sidebar_score: str,
     exam_dir: Path,
     exam_label: str,
+    *,
+    exam_name: str,
+    roster: dict[str, str] | None = None,
 ) -> dict:
     """dom_name: sayfada gorunen ham ad (tiklama + dogrulama icin kullanilir).
     occurrence_index: bu isimdeki KACINCI ogrenci (0 = ilk) - isim bazli
@@ -225,8 +265,26 @@ def capture_student(
     log icin kullanilan ayirt edici ad.
     sidebar_score: soldaki listede bu ogrenci icin gorunen not (ör. '50/100') -
     acilan sayfadaki notla karsilastirilip UCUNCU bir dogrulama katmani
-    olarak kullanilir (ONAY + isim + not ucu birden tutarsa PDF uretilir)."""
-    rows = page.get_by_role("button", name=re.compile(re.escape(dom_name)))
+    olarak kullanilir (ONAY + isim + not ucu birden tutarsa PDF uretilir).
+    exam_name: PDF dosya adinin BASINA gelecek sinav adi (bkz.
+    common.format_student_pdf_stem) - exam_label'dan (dedup/log anahtari
+    icin kullanilir, farkli sekilde formatlanmis olabilir) BILEREK AYRI
+    tutuluyor.
+    roster: {common.normalize_roster_name(ad): ogrenci_no} sozlugu (bkz.
+    common.load_student_roster) - dom_name bu sozlukte bulunursa PDF
+    adina ogrenci numarasi da eklenir, bulunamazsa (ör. 'Öğrenci Tara'
+    hic calistirilmadiysa) o bolum sessizce atlanir."""
+    # TAM SATIR eslesmesi (exact_line_pattern) - substring eslesme
+    # ('AYŞE KAYA' ararken 'AYŞE KAYAALP' satirina da cakisma) hem yanlis
+    # ogrenciye tiklanmasina hem de occurrence_index'in kaymasina yol
+    # acabilirdi. dom_name zaten ayni sayfadaki satirin ilk satirindan
+    # okundugu icin normalde birebir eslesir; sayfa yapisi beklenmedik
+    # sekilde farkliysa (0 eslesme) eski substring davranisina duseriz -
+    # yanlis-pozitif riskine ragmen hic tiklayamamaktan iyi, cunku asil
+    # guvence zaten tiklama SONRASI icerik dogrulamasi (ONAY + isim + not).
+    rows = page.get_by_role("button").filter(has_text=exact_line_pattern(dom_name))
+    if rows.count() == 0:
+        rows = page.get_by_role("button", name=re.compile(re.escape(dom_name)))
     safe_index = min(occurrence_index, max(rows.count() - 1, 0))
     rows.nth(safe_index).click()
 
@@ -256,10 +314,17 @@ def capture_student(
             "sayfa gecisi yavas kalmis olabilir ya da oturum dusmus olabilir"
         )
 
+    student_no = (roster or {}).get(normalize_roster_name(dom_name))
+    pdf_filename = format_student_pdf_stem(exam_name, display_name, student_no)
     return capture_current_page(
         page,
         output_dir=exam_dir,
-        filename_stem=display_name,
+        filename=pdf_filename,
+        # Windows MAX_PATH kirpmasi gerekirse sondaki no+ad kimlik bolumu
+        # korunsun - kirpma sadece bastaki sinav adindan yapilsin (bkz.
+        # common.student_pdf_identity_suffix_chars docstring'i: aksi halde
+        # iki ogrenci ayni dosya adina dusup biri digerini ezebilirdi).
+        filename_protect_suffix_chars=student_pdf_identity_suffix_chars(display_name, student_no),
         log_title=f"{exam_label} - {display_name}",
     )
 
@@ -287,6 +352,10 @@ def main() -> None:
 
         exam_label = derive_course_label(page)
         exam_dir = OUTPUT_DIR / sanitize_filename(exam_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
+        # Bu bagimsiz akista Not Defteri baglami yok, exam_dir'den baska
+        # bir "ders klasoru" da yok - roster'i (varsa) bu tek klasorden
+        # okumaya calisiyoruz (bkz. scan_students.py / 'Öğrenci Tara').
+        roster = load_student_roster(exam_dir)
 
         print("Ogrenci listesi taraniyor (kaydirarak toplaniyor)...")
         student_rows = find_student_rows(page)
@@ -320,7 +389,8 @@ def main() -> None:
             print(f"Yakalaniyor [{row_index + 1}/{len(student_rows)}]: {display_name} (not: {sidebar_score})")
             try:
                 entry = capture_student(
-                    page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label
+                    page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
+                    exam_name=exam_label, roster=roster,
                 )
                 print(f"  -> OK  onay={entry['onay']}  puan={entry['puan']}  pdf={entry['pdf']}")
                 if entry["bozuk_gorsel_sayisi"] > 0:

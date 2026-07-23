@@ -1,3 +1,4 @@
+import csv
 import json
 import platform
 import re
@@ -41,15 +42,26 @@ WINDOWS_RESERVED_NAMES = {
     *(f"lpt{i}" for i in range(1, 10)),
 }
 
+# Windows'ta dosya/klasor ADINDA (yol ayiricilari haric) GERCEKTEN yasak
+# olan TEK karakter kumesi budur - "<>:\"/\|?*" (9 karakter) + gorunmez
+# kontrol karakterleri (\x00-\x1f, ör. yanlislikla panoya yapisan bir
+# satir sonu). Bunun DISINDAKI HER SEY (parantez, virgul, unlem, & % vb.)
+# hem Windows hem macOS/Linux'ta GECERLI bir dosya adi karakteri - eskiden
+# kullanilan "sadece \\w/tire/nokta/bosluk/Turkce harflere izin ver"
+# deseni bunlari da GEREKSIZ yere temizliyordu (CANLI DOGRULANAN bir
+# hata: "BST020 - Veri Madenciliği (1)" gibi Blackboard'in kendi verdigi,
+# birden fazla sube/donem oldugunda parantez iceren gercek bir ders adi,
+# "BST020 - Veri Madenciliği _1_" gibi cirkin bir klasor adina donusuyordu).
+WINDOWS_FORBIDDEN_CHARS_PATTERN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
 
 def sanitize_filename(name: str, max_chars: int = DEFAULT_FILENAME_MAX_CHARS) -> str:
     """Gecersiz karakterleri temizler VE uzunlugu sinirlar - hem macOS/
     Linux hem Windows'ta guvenli bir dosya/klasor adi uretir.
 
-    - `[^\\w\\-. ÇçĞğİıÖöŞşÜü]` deseni zaten Windows'un yasakladigi
-      `< > : " / \\ | ? *` karakterlerinin TAMAMINI da kapsiyor (bunlarin
-      hicbiri \\w/tire/nokta/bosluk degil), o yuzden ayri bir Windows
-      karakter listesi gerekmiyor.
+    - Sadece Windows'un GERCEKTEN yasakladigi karakterler temizlenir
+      (bkz. WINDOWS_FORBIDDEN_CHARS_PATTERN) - parantez, virgul, unlem
+      gibi hem Windows hem macOS/Linux'ta GECERLI karakterlere DOKUNULMAZ.
     - Windows'ta dosya adi SONUNDA nokta/bosluk KABUL EDILMIYOR (sessizce
       atiliyor ya da hataya yol aciyor) - bu yuzden sadece basta degil
       sonda da temizliyoruz.
@@ -63,7 +75,7 @@ def sanitize_filename(name: str, max_chars: int = DEFAULT_FILENAME_MAX_CHARS) ->
       uzunlugu ayrica capture.py'de ayrica kontrol ediliyor (bkz.
       ensure_safe_full_path).
     """
-    name = re.sub(r"[^\w\-. ÇçĞğİıÖöŞşÜü]", "_", name).strip()
+    name = WINDOWS_FORBIDDEN_CHARS_PATTERN.sub("_", name).strip()
     name = name.rstrip(". ")
     if len(name) > max_chars:
         name = name[:max_chars].rstrip(". ")
@@ -72,6 +84,148 @@ def sanitize_filename(name: str, max_chars: int = DEFAULT_FILENAME_MAX_CHARS) ->
     if name.lower() in WINDOWS_RESERVED_NAMES:
         name = f"{name}_dosya"
     return name
+
+
+# 'Öğrenci Tara' (scan_students.py) ile bir dersin Not Defteri > Ogrenciler
+# sekmesinden uretilen (Ad Soyad, Kullanici Adi) listesinin CSV adi -
+# capture_student, PDF dosya adina ogrenci numarasini eklemek icin bunu
+# okur (bkz. load_student_roster). Dosya yoksa ozellik sessizce devre
+# disi kalir (PDF adinda sadece o bolum olmaz), hata VERMEZ.
+STUDENT_ROSTER_CSV_FILENAME = "ogrenciler.csv"
+
+
+# Python'un casefold/lower'i Turkce'nin ozel I kuralini BILMez: "I".casefold()
+# "i" verir (Turkce'de dogrusu "ı"), "İ".casefold() ise "i" + gorunmez bir
+# birlesik nokta (U+0307) uretir. Sonuc: ayni ogrencinin adi bir kaynakta
+# TAMAMEN BUYUK ("ARICI"), digerinde karisik kasada ("Arıcı") gelirse iki
+# normalizasyon BIRBIRINE ESIT CIKMAZ ve ogrenci numarasi PDF adina sessizce
+# eklenmezdi. casefold'dan ONCE Turkce'ye gore dogru kucultme uyguluyoruz.
+_TURKISH_CASEFOLD_MAP = str.maketrans({"İ": "i", "I": "ı"})
+
+
+def normalize_roster_name(name: str) -> str:
+    """Roster CSV'sindeki ad ile sinav sidebar'indan gelen ad, ayni
+    Blackboard sayfasindan farkli zamanlarda scrape edildigi icin
+    KUCUK bicimsel farklar (ekstra bosluk, harf kasasi) tasiyabilir -
+    esleme yaparken bunlari yok sayiyoruz. Harf kasasi indirgemesi
+    Turkce I/İ kuralina gore yapilir (bkz. _TURKISH_CASEFOLD_MAP)."""
+    return re.sub(r"\s+", " ", name.strip()).translate(_TURKISH_CASEFOLD_MAP).casefold()
+
+
+def exact_line_pattern(text: str) -> re.Pattern:
+    """Playwright'in has_text'i SUBSTRING (icerir) esler - 'Vize' aranirken
+    'Vize Mazeret'e, 'AYŞE KAYA' aranirken 'AYŞE KAYAALP'e cakismasin diye,
+    metnin bir SATIRININ TAM OLARAK buna esit olmasini zorunlu kilan bir
+    regex uretir (^...$ + MULTILINE). Hem sinav satiri eslemede
+    (scan_course) hem ogrenci satiri eslemede (scan_grade_center)
+    kullanilir."""
+    return re.compile(rf"^{re.escape(text)}$", re.MULTILINE)
+
+
+def load_student_roster(course_dir: Path) -> dict[str, str]:
+    """course_dir/ogrenciler.csv varsa okur, {normalize_roster_name(ad):
+    kullanici_adi} sozlugu doner. Dosya yoksa (ör. 'Öğrenci Tara' hic
+    calistirilmadiysa) ya da bozuksa BOS sozluk doner - cagiran taraf
+    (capture_student) bunu "ogrenci no bilinmiyor" olarak yorumlar,
+    tarama durmaz.
+
+    AYNI isim (normalize_roster_name sonrasi) CSV'de BIRDEN FAZLA kez
+    geciyorsa (ör. iki FARKLI gercek ogrenci tesaduf eseri ayni ad-soyada
+    sahipse), o isim sonuca HIC DAHIL EDILMEZ. Sinav yakalama tarafinda
+    (capture_student) elde sadece IST IM var, numara YOK - bu yuzden
+    hangi ayni-isimli ogrencinin hangisi oldugu isimden AYIRT EDILEMEZ.
+    Boyle bir durumda ikisinden birine (CSV'de hangisi SONRA yazildiysa
+    ona) rastgele/yanlislikla dogru numarayi vermek yerine, ikisine de
+    'numara bilinmiyor' demek COK daha guvenli - capture_student zaten
+    bu durumu (roster'da bulunamayan isim) sorunsuz destekliyor, PDF
+    adinda sadece o bolum atlanir, YANLIS bir numara sessizce yapistirilmaz."""
+    csv_path = course_dir / STUDENT_ROSTER_CSV_FILENAME
+    if not csv_path.exists():
+        return {}
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+            # delimiter=';': scan_students.write_student_roster_csv ile
+            # AYNI ayiraci kullanmak ZORUNDA (Turkiye Excel varsayilani) -
+            # tutmazsa her satir TEK alan olarak okunur, len(row) < 2
+            # kontrolu asagida HEPSINI sessizce eler, roster BOS doner.
+            reader = csv.reader(f, delimiter=";")
+            next(reader, None)  # baslik satiri
+            rows = [
+                (normalize_roster_name(row[0]), row[1].strip())
+                for row in reader
+                if len(row) >= 2 and row[0].strip()
+            ]
+    except (OSError, csv.Error):
+        return {}
+
+    name_occurrence_counts: dict[str, int] = {}
+    for name, _student_no in rows:
+        name_occurrence_counts[name] = name_occurrence_counts.get(name, 0) + 1
+
+    return {name: student_no for name, student_no in rows if name_occurrence_counts[name] == 1}
+
+
+def format_student_pdf_stem(exam_name: str, display_name: str, student_no: str | None) -> str:
+    """PDF dosya adi: '{sinav_adi}_{ogrenci_no}_{isim-soyisim}' - ogrenci
+    no bilinmiyorsa (roster'da yoksa) o bolum atlanir, tire ile ayrilan
+    diger bolumler ayni kalir. Adin icindeki bosluklar tire (-) ile
+    degistirilir (ör. 'AHMET YILMAZ' -> 'AHMET-YILMAZ'), kullanicinin
+    istegi uzerine.
+
+    display_name ayni isimli ikinci+ ogrencide '(2)' gibi bir ayirt edici
+    ek tasiyabilir (bkz. scan_grade_center.py/scan_course.py'deki
+    occurrence mantigi) - bu ek asagidaki sanitize_filename'e CIPLAK
+    parantezle ULASIRSA, parantezler (Windows'ta izin verilmeyen
+    karakter oldugu icin) ayri ayri '_' ile degistirilip 'AHMET-YILMAZ-_2_'
+    gibi cirkin bir sonuc dogururdu - bu yuzden '(2)' burada, tire
+    donusumunden ONCE, filename-dostu '-2' bicimine ceviriliyor.
+
+    Uzunluk siniri (DEFAULT_FILENAME_MAX_CHARS) asilirsa kirpma SINAV ADI
+    kismindan yapilir, sondaki '{no}_{ad}' kimlik bolumu korunur -
+    sanitize_filename'in kendi SONDAN kirpmasi kimligi yeseydi cok uzun
+    adli bir sinavda iki farkli ogrencinin PDF'i ayni dosya adina dusup
+    biri digerini sessizce ezebilirdi (ayni gerekce icin bkz.
+    student_pdf_identity_suffix_chars docstring'i)."""
+    identity = "_".join(
+        part for part in [(student_no or "").strip(), _dashed_display_name(display_name)] if part
+    )
+    exam_part = exam_name.strip()
+    stem = "_".join(part for part in [exam_part, identity] if part)
+    if len(stem) > DEFAULT_FILENAME_MAX_CHARS and exam_part and identity:
+        keep = max(DEFAULT_FILENAME_MAX_CHARS - len(identity) - 1, 1)
+        exam_part = exam_part[:keep].rstrip(". _") or exam_part[:1]
+        stem = f"{exam_part}_{identity}"
+    return sanitize_filename(stem)
+
+
+def _dashed_display_name(display_name: str) -> str:
+    """format_student_pdf_stem ile student_pdf_identity_suffix_chars'in
+    ORTAK kullandigi ad donusumu - '(2)' ekini '-2'ye cevirir, bosluklari
+    tireler. Iki fonksiyon ayri ayri hesaplasaydi birbirinden sessizce
+    kopabilirlerdi."""
+    without_dup_suffix_parens = re.sub(r"\s*\((\d+)\)\s*$", r"-\1", display_name.strip())
+    return re.sub(r"\s+", "-", without_dup_suffix_parens)
+
+
+def student_pdf_identity_suffix_chars(display_name: str, student_no: str | None) -> int:
+    """format_student_pdf_stem'in urettigi dosya adinda, SONDAKI
+    '{ogrenci_no}_{isim-soyisim}' kimlik bolumunun (basindaki ayirici '_'
+    dahil) kac karakter oldugunu doner - ensure_safe_full_path'in
+    protect_suffix_chars parametresine verilmek icin.
+
+    Neden kritik: Windows'un 260 karakterlik TAM YOL siniri asilirsa
+    ensure_safe_full_path dosya adinin SONUNDAN kirpar - korumasiz
+    birakilirsa kirpilan kisim tam da ogrenciyi AYIRT EDEN no+ad bolumu
+    olur; iki farkli ogrencinin PDF'i AYNI dosya adina dusup biri
+    digerinin SESSIZCE uzerine yazardi (yani bir ogrencinin sinavi
+    kaybolurdu). Kimlik bolumu korununca kirpma sadece bastaki (zaten
+    klasor adinda da bulunan) sinav adi kismindan yapilir."""
+    identity = "_".join(
+        part for part in [(student_no or "").strip(), _dashed_display_name(display_name)] if part
+    )
+    if not identity:
+        return 0
+    return len(identity) + 1  # +1: sinav adini kimlikten ayiran '_' de korunur
 
 
 # Windows'un klasik MAX_PATH siniri (260 karakter, ters egik cizgi dahil
@@ -137,14 +291,14 @@ def set_windows_dpi_awareness() -> None:
     try:
         import ctypes
 
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # type: ignore[attr-defined]
     except Exception:
         # Cok eski Windows surumlerinde (7 ve oncesi) shcore.dll
         # bulunmuyor - daha eski, daha kisitli bir API'ye dusuyoruz.
         try:
             import ctypes
 
-            ctypes.windll.user32.SetProcessDPIAware()
+            ctypes.windll.user32.SetProcessDPIAware()  # type: ignore[attr-defined]
         except Exception:
             # Ikisi de basarisiz olursa program yine de calismaya devam
             # etmeli - sadece buyuk gorunmeye devam eder, cokmemeli.

@@ -15,6 +15,7 @@ import pytest
 
 import common
 from fakes import FakeContext, FakePage, FakeTitledPage
+from scan_students import write_student_roster_csv
 
 # ---------- sanitize_filename ----------
 
@@ -60,6 +61,27 @@ def test_sanitize_filename_preserves_turkish_characters():
     result = common.sanitize_filename("Öğrenci Çalışması İ.Ş.Ü")
 
     assert "ğ" in result and "İ" in result
+
+
+def test_sanitize_filename_preserves_parentheses_and_other_safe_punctuation():
+    """CANLI DOGRULANAN gercek bug: Blackboard'in birden fazla sube/donem
+    oldugunda derse verdigi ad ("BST020 - Veri Madenciliği (1)" gibi)
+    eskiden parantezleri alt cizgiye ceviriyordu ("_1_"), halbuki parantez
+    ne Windows'ta ne macOS/Linux'ta gecersiz bir karakter - sadece
+    WINDOWS_FORBIDDEN_CHARS_PATTERN'daki 9 karakter (+kontrol karakterleri)
+    gercekten temizlenmeli, geri kalan noktalama korunmali."""
+    result = common.sanitize_filename("BST020 - Veri Madenciliği (1)")
+
+    assert result == "BST020 - Veri Madenciliği (1)"
+
+
+def test_sanitize_filename_still_replaces_genuinely_forbidden_characters():
+    # Parantez/virgul gibi guvenli noktalama korunurken, GERCEKTEN yasak
+    # olanlarin (bkz. test_sanitize_filename_replaces_windows_forbidden_
+    # characters) hala temizlendiginden emin oluyoruz - regresyon olmasin.
+    result = common.sanitize_filename("Sınav: Bölüm 1/2 (Final)")
+
+    assert result == "Sınav_ Bölüm 1_2 (Final)"
 
 
 # ---------- ensure_safe_full_path (Windows MAX_PATH) ----------
@@ -294,6 +316,165 @@ def test_derive_course_label_falls_back_when_title_empty():
     assert common.derive_course_label(page) == "ders"
 
 
+def test_format_student_pdf_stem_uses_exam_number_and_name_format():
+    stem = common.format_student_pdf_stem("Kısa Sınav 1", "Mehmet Kadir Arıcı", "2420191035")
+
+    assert stem == "Kısa Sınav 1_2420191035_Mehmet-Kadir-Arıcı"
+
+
+def test_format_student_pdf_stem_omits_student_number_when_unknown():
+    stem = common.format_student_pdf_stem("Kısa Sınav 1", "Mehmet Kadir Arıcı", None)
+
+    assert stem == "Kısa Sınav 1_Mehmet-Kadir-Arıcı"
+
+
+def test_format_student_pdf_stem_joins_multiple_given_names_with_dashes():
+    stem = common.format_student_pdf_stem("Final", "Ali Veli Yılmaz Öztürk", "123456")
+
+    assert stem == "Final_123456_Ali-Veli-Yılmaz-Öztürk"
+
+
+def test_load_student_roster_returns_empty_dict_when_csv_missing(tmp_path):
+    assert common.load_student_roster(tmp_path) == {}
+
+
+def test_load_student_roster_reads_semicolon_delimited_csv(tmp_path):
+    csv_path = tmp_path / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nMEHMET KADİR ARICI;2420191035\r\n",
+        encoding="utf-8-sig",
+    )
+
+    roster = common.load_student_roster(tmp_path)
+
+    assert roster == {common.normalize_roster_name("MEHMET KADİR ARICI"): "2420191035"}
+
+
+def test_load_student_roster_excludes_duplicate_names_entirely(tmp_path):
+    """Iki FARKLI gercek ogrenci tesaduf eseri ayni ad-soyada sahipse,
+    isimden numaraya YANLIS eslesme riskine karsi (bkz. konusma gecmisi)
+    o isim SONUCA HIC DAHIL EDILMEMELI - ikisine de rastgele/yanlis bir
+    numara atamaktansa, ikisine de 'numara bilinmiyor' demek guvenli olan."""
+    csv_path = tmp_path / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\n"
+        "AHMET YILMAZ;2420171001\r\n"
+        "AHMET YILMAZ;2520161055\r\n"
+        "MEHMET KADİR ARICI;2420191035\r\n",
+        encoding="utf-8-sig",
+    )
+
+    roster = common.load_student_roster(tmp_path)
+
+    # Tekrar eden "AHMET YILMAZ" TAMAMEN yok - ne ilk ne ikinci numarasi
+    # sonuca girmis. Tekrarsiz "MEHMET KADİR ARICI" normal sekilde var.
+    assert roster == {common.normalize_roster_name("MEHMET KADİR ARICI"): "2420191035"}
+
+
+def test_write_student_roster_csv_round_trips_through_load_student_roster(tmp_path):
+    """En degerli test bu: write_student_roster_csv'nin URETTIGI dosyayi
+    load_student_roster'in GERCEKTEN geri okuyabildigini dogrular - ayirac/
+    baslik ikisinde de AYNI olmazsa (tam da az once duzeltilen hata
+    sinifi) bu test yakalar, iki fonksiyon birbirinden bagimsiz
+    degistirilip sessizce birbirinden kopabilir."""
+    csv_path = tmp_path / common.STUDENT_ROSTER_CSV_FILENAME
+    write_student_roster_csv(
+        [("MEHMET KADİR ARICI", "2420191035"), ("AYŞE YILMAZ", "2420171001")], csv_path,
+    )
+
+    roster = common.load_student_roster(tmp_path)
+
+    assert roster == {
+        common.normalize_roster_name("MEHMET KADİR ARICI"): "2420191035",
+        common.normalize_roster_name("AYŞE YILMAZ"): "2420171001",
+    }
+
+
+def test_load_student_roster_returns_empty_dict_for_comma_delimited_csv(tmp_path):
+    """Yazici artik ';' kullaniyor (bkz. scan_students.write_student_roster_csv) -
+    eski ',' ile ayrilmis bir dosya (ör. gecmis bir surumden kalma) her
+    satiri TEK alan olarak okutur, len(row) < 2 kontrolu hepsini eler.
+    Bu, iki tarafin AYNI ayiraci kullanmasi gerektigini kanitlayan bir
+    regresyon testi - cokme yerine sessizce bos donmeli."""
+    csv_path = tmp_path / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad,Öğrenci Numarası\r\nMEHMET KADİR ARICI,2420191035\r\n",
+        encoding="utf-8-sig",
+    )
+
+    assert common.load_student_roster(tmp_path) == {}
+
+
+def test_format_student_pdf_stem_converts_duplicate_name_suffix_to_clean_dash():
+    """Ayni isimli 2. ogrencide display_name '... (2)' bicimini tasir
+    (bkz. scan_grade_center.py occurrence mantigi) - parantezler
+    sanitize_filename tarafindan '_' ile degistirilip 'AHMET-YILMAZ-_2_'
+    gibi cirkin bir sonuc doguracagina, temiz bir '-2' eki olarak
+    cikmali."""
+    stem = common.format_student_pdf_stem("Kısa Sınav 1", "Ahmet Yılmaz (2)", "2420171019")
+
+    assert stem == "Kısa Sınav 1_2420171019_Ahmet-Yılmaz-2"
+
+
+def test_normalize_roster_name_matches_turkish_uppercase_and_mixed_case():
+    """Python'un casefold'u Turkce I kuralini bilmez: 'ARICI'.casefold()
+    'arici' verirken 'Arıcı'.casefold() 'arıcı' verir - ayni ogrencinin
+    adi iki kaynakta farkli kasayla gelirse esleme SESSIZCE kacar ve
+    ogrenci numarasi PDF adina eklenmezdi. Turkce'ye gore indirgeme
+    yapildigi icin artik ikisi ayni sonuca varmali."""
+    assert common.normalize_roster_name("MEHMET KADİR ARICI") == common.normalize_roster_name(
+        "Mehmet Kadir Arıcı"
+    )
+
+
+def test_normalize_roster_name_still_collapses_whitespace():
+    assert common.normalize_roster_name("  AHMET   YILMAZ ") == common.normalize_roster_name(
+        "Ahmet Yılmaz"
+    )
+
+
+def test_exact_line_pattern_matches_whole_line_only():
+    pattern = common.exact_line_pattern("AYŞE KAYA")
+
+    assert pattern.search("baslik\nAYŞE KAYA\n50 / 100") is not None
+    # Substring cakismasi OLMAMALI: baska bir ogrencinin daha uzun adi.
+    assert pattern.search("baslik\nAYŞE KAYAALP\n50 / 100") is None
+
+
+def test_student_pdf_identity_suffix_survives_windows_path_trimming(tmp_path):
+    """Windows MAX_PATH kirpmasi ogrenci PDF'inde SONDAKI no+ad kimlik
+    bolumunu ASLA yememeli - aksi halde iki farkli ogrencinin dosyasi
+    ayni ada dusup biri digerinin uzerine sessizce yazardi (ogrenci
+    kaybi). Kirpma sadece bastaki sinav adindan yapilmali."""
+    exam_name = "Çok Uzun Bir Sınav Adı " * 10
+    display_name = "Mehmet Kadir Arıcı"
+    student_no = "2420191035"
+    stem = common.format_student_pdf_stem(exam_name, display_name, student_no)
+    # format_student_pdf_stem KENDI 120 karakter sinirini uygularken de
+    # kimligi korumali (kirpma sinav adindan yapilmali).
+    assert stem.endswith("_2420191035_Mehmet-Kadir-Arıcı")
+
+    protect = common.student_pdf_identity_suffix_chars(display_name, student_no)
+    # Klasor kismi tek basina limitin ALTINDA kalacak ama dosya adiyla
+    # birlikte limiti asacak derinlikte bir yol kur (ensure_safe_full_path
+    # bilerek sadece dosya ADINI kirpar, klasorlere dokunmaz).
+    padding_len = max(common.WINDOWS_SAFE_PATH_LIMIT - 80 - len(str(tmp_path)), 1)
+    long_path = tmp_path / ("k" * padding_len) / f"{stem}.pdf"
+
+    result = common.ensure_safe_full_path(long_path, protect_suffix_chars=protect)
+
+    assert len(str(result)) <= common.WINDOWS_SAFE_PATH_LIMIT
+    assert result.stem.endswith("_2420191035_Mehmet-Kadir-Arıcı")
+
+
+def test_student_pdf_identity_suffix_chars_without_student_number():
+    protect = common.student_pdf_identity_suffix_chars("Ahmet Yılmaz (2)", None)
+
+    stem = common.format_student_pdf_stem("Final", "Ahmet Yılmaz (2)", None)
+    # Korunan sondaki parca, '_' ayirici dahil kimligin tamamini kapsamali.
+    assert stem[-protect:] == "_Ahmet-Yılmaz-2"
+
+
 def test_cloud_sync_warning_detects_onedrive_path():
     from pathlib import Path
 
@@ -346,6 +527,33 @@ def test_append_log_handles_turkish_characters_correctly():
             common.LOG_PATH = original
 
     assert entries[0]["baslik"] == "Öğrenci Çalışması - İstanbul Ğ.Ş.Ü"
+
+
+def test_append_download_log_appends_without_overwriting_previous_sessions(tmp_path):
+    """append_download_log, hem sinav PDF indirme akislarinin (gui.py
+    _scan_not_defteri/_scan_grade_center) HEM 'Öğrenci Tara'nin (_scan_
+    students) ORTAK kullandigi TEK fonksiyon - "a" (append) modunda
+    actigi icin (bkz. fonksiyonun kendi docstring'i: 'EKLER, uzerine
+    yazmaz') ardisik cagrilar birbirini SILMEMELI, sadece dosyanin
+    SONUNA eklenmeli. Bu tek fonksiyonu burada saglam test etmek, TUM
+    cagiran taraflar (4 farkli yer) icin ayni guvenceyi saglar."""
+    log_path = tmp_path / common.DOWNLOAD_LOG_FILENAME
+
+    common.append_download_log(
+        tmp_path, "BST020 — Not Defteri", ["Kısa Sınav 1 indirildi"],
+        {"ok": 20, "skip": 0, "fail": 0},
+    )
+    common.append_download_log(
+        tmp_path, "MAT101 — Not Defteri", ["Vize indirildi"],
+        {"ok": 30, "skip": 2, "fail": 1},
+    )
+
+    content = log_path.read_text(encoding="utf-8")
+
+    assert "BST020 — Not Defteri" in content
+    assert "MAT101 — Not Defteri" in content
+    # ilk oturum SILINMEDI, ikincisi onun ALTINA eklendi (ustune degil)
+    assert content.index("BST020") < content.index("MAT101")
 
 
 def test_already_captured_titles_ignores_entries_with_missing_pdf(tmp_path, monkeypatch):

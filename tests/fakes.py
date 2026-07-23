@@ -33,7 +33,7 @@ class FakePage:
         self._cached_url_exc = cached_url_exc
         self._wait_exc = wait_exc
 
-    def evaluate(self, _script: str) -> str:
+    def evaluate(self, _script: str) -> str | None:
         if self._live_url_exc:
             raise self._live_url_exc
         return self._live_url_value
