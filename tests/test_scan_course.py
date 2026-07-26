@@ -8,7 +8,17 @@ SESSIZCE hic taranmazdi - kullanici eksigi fark edemezdi. Artik ikinci
 satir islenmeyip elenenler listesinde ACIKCA gerekcesiyle gorunmeli.
 """
 
-from scan_course import ExamRow, _dedupe_exam_rows
+from scan_course import GRADING_STATUS_COMPLETE_PATTERN, ExamRow, _dedupe_exam_rows
+
+
+def test_grading_status_pattern_matches_regardless_of_case():
+    """FELAKET SENARYOSU regresyonu: canli bir ekran goruntusunde 'Tümüne
+    Not Verildi' degil 'Tümüne not verildi' (kucuk 'n') gorulmustu.
+    Pattern case-sensitive kalsaydi bu durumdaki (ör. BUTUNLEME gibi
+    kritik) bir sinav satiri ne islenecek ne de atlanan listesine girerdi -
+    SESSIZCE tamamen kaybolurdu."""
+    assert GRADING_STATUS_COMPLETE_PATTERN.search("Tümüne not verildi")
+    assert GRADING_STATUS_COMPLETE_PATTERN.search("tamamlandı")
 
 
 def test_dedupe_exam_rows_keeps_unique_names_untouched():

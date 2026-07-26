@@ -69,8 +69,16 @@ GRADING_STATUS_COMPLETE_MARKERS = ("Tamamlandı", "Tümüne Not Verildi")
 # birlestirilmis, her biri re.escape ile ozel regex karakterlerinden
 # arindirilmis. Log/uyari mesajlarinda insan-okunur gosterim icin
 # GRADING_STATUS_COMPLETE_MARKERS_LABEL kullanilir (bkz. asagisi).
+#
+# IGNORECASE BILEREK eklendi: canli bir ekran goruntusunde "Tümüne Not
+# Verildi" degil "Tümüne not verildi" (kucuk 'n') gorulmustu - Blackboard
+# harf buyuklugunu tutarli kullanmiyor olabilir. Bu satirlar eslesmezse
+# o sinav (ozellikle BUTUNLEME gibi kritik olanlar) ne islenecek ne de
+# atlanan listesine girer, SESSIZCE tamamen kaybolurdu - buyuk/kucuk harf
+# farkina karsi kayitsiz kalmak bedelsiz, riski tamamen ortadan kaldiriyor.
 GRADING_STATUS_COMPLETE_PATTERN = re.compile(
-    "|".join(re.escape(marker) for marker in GRADING_STATUS_COMPLETE_MARKERS)
+    "|".join(re.escape(marker) for marker in GRADING_STATUS_COMPLETE_MARKERS),
+    re.IGNORECASE,
 )
 # Log/uyari mesajlarinda gosterilecek, KENDI ICINDE tirnakli, hazir
 # metin - ör. "'Tamamlandı' / 'Tümüne Not Verildi'" - cagiran taraflar
