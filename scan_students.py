@@ -191,10 +191,15 @@ def write_student_roster_csv(roster: list[tuple[str, str]], csv_path: Path) -> N
     biri degisip digeri unutulursa roster'in TAMAMI sessizce
     okunamaz hale gelir (bkz. o fonksiyonun docstring'i)."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+    # tmp dosyaya yazip sonra atomic replace() - yarim yazimda (ör. cokme)
+    # csv_path'in kismi/bozuk kalmasini onler (bkz. common.append_log'daki
+    # ayni pattern).
+    tmp_path = csv_path.with_suffix(".csv.tmp")
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f, delimiter=";")
         writer.writerow(["Ad Soyad", "Öğrenci Numarası"])
         writer.writerows(roster)
+    tmp_path.replace(csv_path)
 
 
 def main() -> None:

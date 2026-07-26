@@ -1831,7 +1831,15 @@ class BlackboardGUI:
         text_widget.pack(fill="both", expand=True)
         log_path = self.output_dir / DOWNLOAD_LOG_FILENAME
         if log_path.exists():
-            text_widget.insert("1.0", log_path.read_text(encoding="utf-8"))
+            try:
+                content = log_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                # Yarim kalmis bir yazma (ör. cokme/guc kesilmesi tam bir
+                # coklu-bayt Turkce karakterin ortasindayken) dosyayi
+                # bozuk UTF-8 birakabilir - bu durumda sessizce cokmek
+                # yerine ne oldugunu acikca gosteriyoruz.
+                content = f"(Log dosyası okunamadı: {exc})"
+            text_widget.insert("1.0", content)
         else:
             text_widget.insert("1.0", "Henüz bir indirme oturumu tamamlanmadı.")
         text_widget.config(state="disabled")
@@ -2028,13 +2036,26 @@ class BlackboardGUI:
                     elif command == "open_browser":
                         try:
                             PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                            # Onceki bir zorla-kapatma sonrasi yetim kalmis
-                            # kilit dosyalari varsa (baska bir surec KULLANMIYORSA
-                            # kayipsiz) temizlemeyi dene - bkz. fonksiyon docstring'i.
-                            clear_stale_profile_lock(PROFILE_DIR)
-                            context = p.chromium.launch_persistent_context(
-                                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-                            )
+                            try:
+                                context = p.chromium.launch_persistent_context(
+                                    str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+                                )
+                            except Exception as exc:
+                                # Kilit dosyalarini PROAKTIF (her denemede once)
+                                # degil, sadece launch GERCEKTEN kilit hatasiyla
+                                # basarisiz olduktan SONRA temizleyip bir kez
+                                # daha deniyoruz - bkz. clear_stale_profile_lock
+                                # docstring'i. Proaktif temizlik, Unix'te dosya
+                                # kilitlemesi olmadigi icin hala CANLI baska bir
+                                # Chrome surecinin kilidini de sessizce silip iki
+                                # surecin ayni profile ayni anda yazmasina (oturum/
+                                # cookie bozulmasina) yol acabiliyordu.
+                                if not is_profile_lock_error(exc):
+                                    raise
+                                clear_stale_profile_lock(PROFILE_DIR)
+                                context = p.chromium.launch_persistent_context(
+                                    str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+                                )
                         except Exception as exc:
                             # Baslatma basarisizsa yarim bir context kalmasin -
                             # aksi halde bos-zaman URL dongusu olu context'e

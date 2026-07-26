@@ -365,7 +365,7 @@ def read_log() -> list[dict]:
         # yazarken UnicodeEncodeError firlatabiliyor hem de baska makinede
         # yazilmis dosya yanlis okunabiliyordu. append_log ile ayni kodlama.
         return json.loads(LOG_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         # FELAKET SENARYOSU savunmasi: dosya bozuksa (elle duzenleme,
         # guc kesintisi, disk hatasi...) eskiden burada RuntimeError
         # firlatiliyordu - bu hata already_captured_titles/append_log
