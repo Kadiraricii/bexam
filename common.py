@@ -765,6 +765,18 @@ def browser_launch_kwargs() -> dict:
     (PROFILE_DIR) kullandigimiz icin Chrome'un "varsayilan profili
     otomatiklestirme desteklenmiyor" kisitlamasina takilmiyoruz.
 
+    --incognito: paylasilan/ortak bilgisayarlarda kullanildigi icin
+    tercih edildi - pencere Chrome'un GERCEK Gizli Sekme moduyla acilir
+    (koyu tema + casus ikonu), oturum/cerez/gecmis sadece o pencere acikken
+    bellekte tutulur ve pencere kapaninca silinir. Bunun BEDELI: PROFILE_DIR
+    ARTIK oturumu kaliciliklarini KORUMUYOR - "Tarayıcıyı Aç" her
+    tiklandiginda SSO'ya yeniden giris gerekir (eskiden .state/profile
+    bunu kalici tutuyordu - bilincli olarak vazgecildi, bkz. proje
+    gecmisi). PROFILE_DIR yine de kullaniliyor cunku launch_persistent_context
+    bir user_data_dir GEREKTIRIYOR ve kendi ayri klasorumuzu kullanmak
+    yukaridaki "varsayilan profil" kisitlamasini onluyor - --incognito ile
+    birlikte bu klasore gercek/kalici bir veri yazilmiyor.
+
     chromium_sandbox=True: Playwright, `chromium_sandbox` ACIKCA True
     VERILMEDIKCE HER launch'a kendiliginden `--no-sandbox` ekliyor (bkz.
     playwright'in kendi kaynagi, `_innerDefaultArgs`: "if
@@ -785,6 +797,7 @@ def browser_launch_kwargs() -> dict:
             f"--window-size={DEFAULT_WINDOW_WIDTH},{DEFAULT_WINDOW_HEIGHT}",
             "--window-position=0,0",
             "--disable-blink-features=AutomationControlled",
+            "--incognito",
         ],
         "ignore_default_args": ["--enable-automation"],
     }

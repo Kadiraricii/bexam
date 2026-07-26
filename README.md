@@ -17,8 +17,11 @@ otomatik ayıklayıp kaydeder.
 4. Aynı oturumda tarayıcı kapanmadan istenildiği kadar farklı sayfa yakalanabilir
    (her seferinde başka bir sınav/öğrenciye gidip tekrar ENTER).
 
-Oturum bilgisi `.state/profile` klasöründe (kalıcı Chrome profili) tutulur, bu sayede
-her çalıştırmada yeniden SSO girişi gerekmeyebilir.
+Tarayıcı **Gizli Sekme (Incognito)** modunda açılır — paylaşılan/ortak bilgisayarlarda
+iz bırakmamak için tercih edildi. Bunun sonucu olarak oturum/çerez bilgisi pencere
+kapanınca SİLİNİR: her "Tarayıcıyı Aç" ile yeniden SSO girişi yapman gerekir
+(`.state/profile` klasörü hâlâ var ama artık kalıcı bir oturum tutmuyor — sadece
+Chrome'un otomasyon için ayrı bir profil klasörüne ihtiyaç duymasından kaynaklanıyor).
 
 ## Kurulum
 
@@ -270,7 +273,7 @@ Bu yüzden tarayıcı otomasyonu (Playwright) ile devam ediyoruz.
 | `start.sh` / `start.bat` | `gui.py`'yi sanal ortamı otomatik aktive ederek başlatır (macOS-Linux / Windows) |
 | `requirements.txt` | Python bağımlılıkları (tek dış paket: Playwright) |
 | `output/` | Üretilen PDF'ler |
-| `.state/profile` | Kalıcı Chrome oturumu (cookie/login) |
+| `.state/profile` | Chrome'un otomasyon için ayrı profil klasörü (Gizli Sekme'de oturum/cookie kalıcı DEĞİL, kalıcı olan sadece klasörün kendisi) |
 | `.state/captures.json` | Yakalanan her sayfanın metadata kaydı |
 
 ## Hoca hesabı: scan_grade_center.py
