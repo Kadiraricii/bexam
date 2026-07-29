@@ -651,7 +651,7 @@ madde 5).
 
 ### "Gönderimler" listesi — artık desteklenen akış
 
-Önceki bir sürümde hocadan gelen bir ekran görüntüsüyle keşfedilip henüz
+Önceki bir sürümde keşfedilip henüz
 kod yazılmamış olarak not edilen davranış artık uygulandı: Not
 Defteri'nde bir sınav satırının "Tamamlandı" etiketine tıklandığında
 Blackboard genelde önce o sınavın **tüm gönderimlerini** listeleyen bir
