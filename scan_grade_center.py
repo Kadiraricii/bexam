@@ -74,6 +74,20 @@ BATCH_SIZE = 20
 BATCH_PAUSE_S = 20.0
 MAX_CONSECUTIVE_FAILURES = 5
 
+SYSTEM_EXCLUDE_KEYWORDS = {
+    "kurslar",
+    "öğrenciler",
+    "sorular",
+    "not verme durumu",
+    "tüm not verme durumları",
+    "notları gönder",
+    "not defteri",
+    "not verilebilir öğeler",
+    "notlandırma",
+    "geri",
+    "kapat",
+}
+
 
 def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
     """Gorunen her ogrenci satirindan (ad, not) cifti toplar.
@@ -82,18 +96,21 @@ def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
     daha sonra tiklanan sayfadaki notla karsilastirilarak dogru
     ogrenciye tiklandigini teyit etmek icin kullanilir.
     """
+    panel = page.locator(".flexible-attempt-grading-panel, [data-page-title*='Not Verme']").first
+    if panel.count() == 0:
+        panel = page
+
     selectors = [
+        '[class*="cardWrapper"]',
+        '[class*="CardWrapper"]',
+        '[class*="userCard"]',
         '[role="button"]',
         'button',
         '[role="option"]',
         '[role="listitem"]',
         '[role="treeitem"]',
-        'li',
-        'a',
-        'div.student-row',
-        'div',
     ]
-    candidates = page.locator(", ".join(selectors)).filter(has_text=STUDENT_ROW_SCORE_PATTERN)
+    candidates = panel.locator(", ".join(selectors)).filter(has_text=STUDENT_ROW_SCORE_PATTERN)
     rows: list[tuple[str, str]] = []
     seen_names: set[str] = set()
 
@@ -113,12 +130,14 @@ def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
         if not lines:
             continue
 
-        score_match = STUDENT_ROW_SCORE_PATTERN.search(text)
-        score = score_match.group(0).strip() if score_match else ""
-
         student_name = lines[0]
+        if student_name.lower() in SYSTEM_EXCLUDE_KEYWORDS or any(kw in student_name.lower() for kw in SYSTEM_EXCLUDE_KEYWORDS):
+            continue
         if STUDENT_ROW_SCORE_PATTERN.match(student_name) or len(student_name) < 2:
             continue
+
+        score_match = STUDENT_ROW_SCORE_PATTERN.search(text)
+        score = score_match.group(0).strip() if score_match else ""
 
         row_key = f"{student_name}_{score}"
         if row_key not in seen_names:
@@ -135,7 +154,7 @@ def collect_visible_rows_in_container(scroll_handle) -> list[tuple[str, str]]:
     """
     raw_texts = scroll_handle.evaluate(
         """el => {
-            const buttons = Array.from(el.querySelectorAll('[role="button"], button, [role="option"], [role="listitem"], li, a, div'));
+            const buttons = Array.from(el.querySelectorAll('[class*="cardWrapper"], [class*="CardWrapper"], [class*="userCard"], [role="button"], button, [role="option"], [role="listitem"]'));
             return buttons.map((b) => (b.innerText || '').trim()).filter(Boolean);
         }"""
     )
@@ -147,22 +166,26 @@ def collect_visible_rows_in_container(scroll_handle) -> list[tuple[str, str]]:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             continue
+        student_name = lines[0]
+        if student_name.lower() in SYSTEM_EXCLUDE_KEYWORDS or len(student_name) < 2:
+            continue
         score_match = STUDENT_ROW_SCORE_PATTERN.search(text)
         score = score_match.group(0).strip() if score_match else ""
-        student_name = lines[0]
-        if len(student_name) < 2:
-            continue
         rows.append((student_name, score))
     return rows
 
 
 def find_scroll_container(page: Page, anchor_text: str):
     """Verilen ogrenci satirindan yukari dogru en yakin kaydirilabilir atayi bulur."""
-    anchor = page.get_by_text(anchor_text, exact=True).first
+    panel = page.locator(".flexible-attempt-grading-panel, [data-page-title*='Not Verme']").first
+    if panel.count() == 0:
+        panel = page
+
+    anchor = panel.get_by_text(anchor_text, exact=True).first
     if anchor.count() == 0:
-        anchor = page.get_by_role("button", name=re.compile(re.escape(anchor_text))).first
+        anchor = panel.get_by_role("button", name=re.compile(re.escape(anchor_text))).first
     if anchor.count() == 0:
-        anchor = page.get_by_text(re.compile(re.escape(anchor_text))).first
+        anchor = panel.get_by_text(re.compile(re.escape(anchor_text))).first
     if anchor.count() == 0:
         return None
     handle = anchor.evaluate_handle(
@@ -310,23 +333,27 @@ def capture_student(
     # sekilde farkliysa (0 eslesme) eski substring davranisina duseriz -
     # yanlis-pozitif riskine ragmen hic tiklayamamaktan iyi, cunku asil
     # guvence zaten tiklama SONRASI icerik dogrulamasi (ONAY + isim + not).
+    panel = page.locator(".flexible-attempt-grading-panel, [data-page-title*='Not Verme']").first
+    if panel.count() == 0:
+        panel = page
+
     selectors = [
+        '[class*="cardWrapper"]',
+        '[class*="CardWrapper"]',
+        '[class*="userCard"]',
         '[role="button"]',
         'button',
         '[role="option"]',
         '[role="listitem"]',
         '[role="treeitem"]',
-        'li',
-        'a',
-        'div',
     ]
-    rows = page.locator(", ".join(selectors)).filter(has_text=exact_line_pattern(dom_name))
+    rows = panel.locator(", ".join(selectors)).filter(has_text=exact_line_pattern(dom_name))
     if rows.count() == 0:
-        rows = page.get_by_role("button", name=re.compile(re.escape(dom_name)))
+        rows = panel.get_by_role("button", name=re.compile(re.escape(dom_name)))
     if rows.count() == 0:
-        rows = page.get_by_text(exact_line_pattern(dom_name))
+        rows = panel.get_by_text(exact_line_pattern(dom_name))
     if rows.count() == 0:
-        rows = page.get_by_text(dom_name)
+        rows = panel.get_by_text(dom_name)
 
     safe_index = min(occurrence_index, max(rows.count() - 1, 0))
     rows.nth(safe_index).click()
