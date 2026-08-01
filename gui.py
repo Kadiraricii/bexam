@@ -60,6 +60,7 @@ from common import (
     check_output_writable,
     clear_stale_profile_lock,
     cloud_sync_warning,
+    collect_download_overview,
     DEFAULT_FOLDER_MAX_CHARS,
     derive_course_label,
     find_blackboard_pages,
@@ -75,6 +76,7 @@ from common import (
     resolve_active_page,
     sanitize_filename,
     set_windows_dpi_awareness,
+    summarize_download_overview,
     wait_for_blackboard,
 )
 from scan_course import (
@@ -92,6 +94,7 @@ from scan_grade_center import (
     find_student_rows,
 )
 from scan_students import find_student_roster, write_student_roster_csv
+from web_view import AUTO_REFRESH_SECONDS, WebViewServer
 
 # ---------- gorsel dil (renk/tipografi) ----------
 # Kullanicinin kendi belirttigi, Linear/Raycast/Notion Desktop esintili
@@ -166,6 +169,47 @@ CURSOR_HAND = "hand2"
 # bellekte tutulan) gecmisine bir ust sinir - cok uzun oturumlarda bellegin
 # sinirsiz buyumesini onler.
 LOG_HISTORY_MAX_LINES = 2000
+
+# Indirme sayfasindaki sinav kart izgarasi - baslangic/varsayilan sutun
+# sayisi (DEFAULT_WINDOW_WIDTH genisliginde rahat sigan deger). Pencere
+# yeniden boyutlandirildikca GERCEK sutun sayisi _ideal_download_columns
+# ile CANLI yeniden hesaplanir (bkz. _on_download_body_configure) - sabit
+# birakilsaydi pencere kucultulunce kartlar sikisir, buyutulunce de bos
+# alanda dar 3 sutuna hapsolurdu.
+DOWNLOAD_CARD_COLUMNS = 3
+# Bir sutunun rahat sigmasi icin hedeflenen minimum genislik (piksel) -
+# mevcut genislik buna bolunerek CANLI sutun sayisi hesaplanir. Cok dar
+# pencerede (kucuk ekran/kucultulmus pencere) 1 sutuna, cok genis bir
+# ekranda DOWNLOAD_CARD_MAX_COLUMNS'a kadar sutuna cikabilir.
+DOWNLOAD_CARD_MIN_WIDTH = 260
+DOWNLOAD_CARD_MIN_COLUMNS = 1
+DOWNLOAD_CARD_MAX_COLUMNS = 4
+# Suruklenerek yeniden boyutlandirma sirasinda onlarca <Configure> olayi
+# art arda ateslenebiliyor - her birinde tum kart izgarasini yeniden
+# kurmak gozle gorulur bir kekemelige yol acardi. Son olaydan bu kadar
+# ms sonra HALA yeni bir olay gelmediyse yeniden kuruluyor (debounce).
+DOWNLOAD_RESIZE_DEBOUNCE_MS = 150
+# Bir kartta eksik ogrenci listesi cok uzarsa (ör. 30 kisilik bir sinifin
+# yarisi eksikse) kart devasa buyumesin diye ilk birkacini gosterip
+# kalanini "+N daha" ile ozetliyoruz.
+MAX_MISSING_CHIPS_PER_CARD = 6
+# Sinav basligi cok uzunsa (ör. hocanin Blackboard'a girdigi aciklayici,
+# uzun bir sinav adi) wraplength olmadan kart genisligini bozup izgarayi
+# ittirebiliyordu - metni kart genisligine gore sarmaliyoruz. Deger,
+# DOWNLOAD_CARD_MIN_WIDTH'in (240px) kart ic dolgusu + halka+bosluk
+# dusulmus hali kadar (kasitli bir guvenlik payiyla) tutuluyor ki EN DAR
+# sutun genisliginde bile metin kart sinirini asmasin.
+DOWNLOAD_CARD_TEXT_WRAP = 150
+# Cok uzun bir ogrenci adi (nadiren, cok parcali soyadlarinda) tek bir
+# "eksik" chip'ini kart genisliginin disina tasirabiliyordu - ekranda
+# gosterilecek adi guvenli bir uzunlukta kirpiyoruz.
+CHIP_NAME_MAX_CHARS = 26
+
+
+def _truncate_chip_name(name: str) -> str:
+    if len(name) <= CHIP_NAME_MAX_CHARS:
+        return name
+    return name[: CHIP_NAME_MAX_CHARS - 1].rstrip() + "…"
 
 
 def _rounded_rect_points(x1: float, y1: float, x2: float, y2: float, radius: float) -> list[float]:
@@ -606,6 +650,16 @@ ONBOARDING_FEATURES = [
     ("📂", "Düzenli Arşiv", "PDF'ler ders ve sınav adına göre otomatik klasörlenir."),
     ("🔄", "Tekrarlanabilir", "Daha önce indirilenler atlanır, eksikler tamamlanır."),
     ("⚡", "Kolay Kullanım", "Sadece adımları izleyin, gerisini program halleder."),
+    (
+        "🎯", "Eksik Takibi",
+        "'Öğrenci Tara' çalıştırıldıysa, İndirme sayfasında her sınavın hangi "
+        "öğrencide eksik olduğu kartların üzerinde tek bakışta görünür.",
+    ),
+    (
+        "🌐", "Web Görünümü",
+        "Ayarlar'dan açtığın PIN korumalı bir bağlantıyla, aynı ağdaki başka bir "
+        "bilgisayardan (ör. lab'daki ikinci bilgisayar) sınav durumunu izleyebilirsin.",
+    ),
 ]
 
 COLOR_ONBOARD_SIDE_BG = "#EEF2FB"
@@ -659,6 +713,17 @@ class BlackboardGUI:
         # akisindan BAGIMSIZ ama ayni TEK Playwright worker thread'ini
         # paylastigi icin, digerleriyle CAKISMAMASI icin kendi bayragi var.
         self._student_scan_enabled = False
+        # Ayarlar sayfasindaki "Web Görünümü" ac/kapa anahtari - Playwright
+        # worker thread'inden TAMAMEN bagimsiz (ayri bir HTTP sunucu
+        # thread'i, bkz. web_view.py), o yuzden kendi bayragina/nesnesine
+        # ihtiyaci var. None = hic baslatilmadi/durduruldu.
+        self._web_view_server: WebViewServer | None = None
+        # Indirme sayfasindaki kart izgarasinin sutun sayisi - pencere
+        # genisligine gore CANLI olarak yeniden hesaplanir (bkz.
+        # _on_download_body_configure) ki pencere kucultulunce kartlar
+        # sikismasin, buyutulunce de bos alanda 3 dar sutuna hapsolmasin.
+        self._download_columns = DOWNLOAD_CARD_COLUMNS
+        self._download_resize_job: str | None = None
         self._timeline_stage = 0
         self._totals = {"ok": 0, "skip": 0, "fail": 0}
         self._compact_mode = False
@@ -756,14 +821,19 @@ class BlackboardGUI:
 
         def _on_mousewheel(event) -> None:
             try:
-                if getattr(event, "num", None) == 5 or getattr(event, "delta", 0) < 0:
-                    canvas.yview_scroll(1, "units")
-                elif getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
-                    canvas.yview_scroll(-1, "units")
+                num = getattr(event, "num", None)
+                delta = getattr(event, "delta", 0)
+                if num == 5 or delta < 0:
+                    units = max(1, int(abs(delta) / 40)) if delta else 1
+                    canvas.yview_scroll(units, "units")
+                elif num == 4 or delta > 0:
+                    units = max(1, int(abs(delta) / 40)) if delta else 1
+                    canvas.yview_scroll(-units, "units")
             except tk.TclError:
                 # Sayfa zaten degisip canvas yok edilmisken gecikmeli bir
                 # tekerlek olayi gelirse sessizce yok say.
                 pass
+
 
         def _bind_mousewheel(_event=None) -> None:
             canvas.bind_all("<MouseWheel>", _on_mousewheel)
@@ -1251,7 +1321,7 @@ class BlackboardGUI:
             widget.destroy()
         builders = {
             "home": self._build_home_page,
-            "download": self._build_download_tree_page,
+            "download": self._build_download_page,
             "outputs": self._build_outputs_page,
             "logs": self._build_logs_page,
             "settings": self._build_settings_page,
@@ -1644,13 +1714,15 @@ class BlackboardGUI:
 
     # ---------- Indirme: cikti klasorunu agac (tree) olarak gezinme ----------
 
-    def _build_download_tree_page(self, parent: tk.Widget) -> None:
-        """Cikti klasorunu (ders -> sinav -> PDF) tiklanip genisletilebilen
-        bir agac gorunumunde gosterir - Finder'a gitmeden goz atip cift
-        tiklayarak acabilmek icin. Native ttk.Treeview kullaniliyor (ozel
-        Canvas widget'lardan farkli olarak, hiyerarsik agac + kaydirma +
-        klavye navigasyonu gibi karmasik davranislari sifirdan yazmak
-        yerine Tkinter'in kendi saglam bilesenine guveniyoruz)."""
+    def _build_download_page(self, parent: tk.Widget) -> None:
+        """Cikti klasorunu (ders -> sinav) kart/bento gorunumunde gosterir:
+        her sinav kendi tamamlanma halkasiyla (roster'a gore kac ogrencinin
+        PDF'i geldigi) bir kart. Onceden tekil bir ttk.Treeview kullaniliyordu
+        (dosya duzeyine kadar acilip cift tiklanabilen bir agac); kart
+        gorunumu SADECE sinav-duzeyinde durumu ozetler - bir karta tiklamak
+        o sinavin klasorunu isletim sisteminin dosya yoneticisinde acar
+        (tek tek bir PDF'i o klasorden secip acabilirsin, bkz.
+        _on_exam_card_click)."""
         wrapper = tk.Frame(parent, bg=COLOR_BG)
         wrapper.pack(fill="both", expand=True, padx=28, pady=24)
 
@@ -1663,104 +1735,262 @@ class BlackboardGUI:
         ).pack(fill="x")
         tk.Label(
             title_col,
-            text="Tüm ders/sınav klasörlerini ve içindeki PDF'leri buradan gezebilir, "
-            "çift tıklayarak açabilirsin.",
+            text="Her sınavın kaç öğrencisinin PDF'i geldiğini kartlardan gör - "
+            "bir karta tıklamak o sınavın klasörünü açar.",
             bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_MUTED, anchor="w",
         ).pack(fill="x", pady=(2, 0))
         RoundedButton(
-            header, text="Yenile", command=self._refresh_download_tree, kind="secondary", width=110,
+            header, text="Yenile", command=self._refresh_download_cards, kind="secondary", width=110,
         ).pack(side="right")
 
-        card = self._make_card(wrapper)
-        card.pack(fill="both", expand=True, pady=(16, 0))
+        self._download_body = self._make_scrollable_area(wrapper)
+        self._download_body.bind("<Configure>", self._on_download_body_configure)
+        self._refresh_download_cards()
 
-        tree_row = tk.Frame(card.inner, bg=COLOR_CARD)
-        tree_row.pack(fill="both", expand=True)
-
-        style = ttk.Style()
-        try:
-            style.configure(
-                "Output.Treeview", font=("", 13), rowheight=30,
-                background=COLOR_CARD, fieldbackground=COLOR_CARD, foreground=COLOR_TEXT,
-            )
-            style.configure("Output.Treeview.Heading", font=("", 12, "bold"))
-            style.map("Output.Treeview", background=[("selected", COLOR_ACCENT_SOFT)],
-                      foreground=[("selected", COLOR_ACCENT)])
-        except Exception:
-            pass
-
-        self.download_tree = ttk.Treeview(
-            tree_row, style="Output.Treeview", columns=("info",), show="tree headings",
-        )
-        self.download_tree.heading("#0", text="Ad")
-        self.download_tree.heading("info", text="Bilgi")
-        self.download_tree.column("info", width=160, anchor="e", stretch=False)
-        scrollbar = ttk.Scrollbar(tree_row, orient="vertical", command=self.download_tree.yview)
-        self.download_tree.configure(yscrollcommand=scrollbar.set)
-        self.download_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self.download_tree.bind("<Double-1>", self._on_download_tree_double_click)
-
-        self._tree_paths: dict[str, Path] = {}
-        self._refresh_download_tree()
-
-    def _refresh_download_tree(self) -> None:
-        tree = getattr(self, "download_tree", None)
-        if tree is None:
+    def _on_download_body_configure(self, event: "tk.Event") -> None:
+        """Indirme sayfasi govdesinin genisligi degistikce (pencere
+        yeniden boyutlandirilinca) kart izgarasinin sutun sayisini CANLI
+        yeniden hesaplar - bkz. DOWNLOAD_CARD_MIN_WIDTH."""
+        ideal = self._ideal_download_columns(event.width)
+        if ideal == self._download_columns:
             return
-        tree.delete(*tree.get_children())
-        self._tree_paths = {}
-        if not self.output_dir.exists():
-            tree.insert(
-                "", "end", text="📁  Klasör henüz oluşturulmadı (ilk indirmede oluşacak)",
-                values=("",),
-            )
-            return
-        self._populate_tree_node(tree, "", self.output_dir)
-
-    def _populate_tree_node(self, tree: ttk.Treeview, parent_item: str, dir_path: Path) -> None:
-        try:
-            # macOS her klasore kendiliginden ".DS_Store" gibi gizli meta-veri
-            # dosyalari birakiyor - bunlar bizim indirdigimiz gercek icerik
-            # degil, acilabilecek bir uygulamalari da yok (cift tiklayinca
-            # "no application knows how to open" hatasi veriyordu). Adi "."
-            # ile baslayan HER SEYI (gizli dosya/klasor) listeden atliyoruz.
-            entries = sorted(
-                (p for p in dir_path.iterdir() if not p.name.startswith(".")),
-                key=lambda p: (p.is_file(), p.name.lower()),
-            )
-        except OSError:
-            return
-        for entry in entries:
-            # Tek bir okunamayan alt klasor/dosya (izin sorunu, senkron
-            # sirasinda kilitli OneDrive dosyasi vb.) tum agacin insasini
-            # cokertmesin - o girdi atlanir, kalanlar listelenmeye devam eder.
+        if self._download_resize_job is not None:
             try:
-                if entry.is_dir():
-                    item_count = sum(1 for p in entry.iterdir() if not p.name.startswith("."))
-                    item = tree.insert(
-                        parent_item, "end", text=f"📁  {entry.name}",
-                        values=(f"{item_count} öğe",), open=(parent_item == ""),
-                    )
-                    self._tree_paths[item] = entry
-                    self._populate_tree_node(tree, item, entry)
-                else:
-                    size_kb = entry.stat().st_size / 1024
-                    icon = "📄" if entry.suffix.lower() == ".pdf" else "📝"
-                    item = tree.insert(
-                        parent_item, "end", text=f"{icon}  {entry.name}",
-                        values=(f"{size_kb:.0f} KB",),
-                    )
-                    self._tree_paths[item] = entry
-            except OSError:
-                continue
+                self.root.after_cancel(self._download_resize_job)
+            except tk.TclError:
+                pass
+        self._download_resize_job = self.root.after(
+            DOWNLOAD_RESIZE_DEBOUNCE_MS, lambda: self._apply_download_column_count(ideal)
+        )
 
-    def _on_download_tree_double_click(self, _event=None) -> None:
-        tree = self.download_tree
-        selected = tree.focus()
-        path = self._tree_paths.get(selected)
-        if path is not None and path.exists():
-            open_in_file_manager(path)
+    def _ideal_download_columns(self, available_width: int) -> int:
+        # Widget henuz gercekten yerlesmemisse (ör. sayfa ilk kurulurken)
+        # Tk gecici olarak 1 gibi anlamsiz kucuk genislikler bildirebilir -
+        # boyle durumlarda mevcut/varsayilan sutun sayisini koruyoruz.
+        if available_width <= 1:
+            return self._download_columns
+        columns = available_width // DOWNLOAD_CARD_MIN_WIDTH
+        return max(DOWNLOAD_CARD_MIN_COLUMNS, min(DOWNLOAD_CARD_MAX_COLUMNS, columns))
+
+    def _apply_download_column_count(self, columns: int) -> None:
+        self._download_resize_job = None
+        if columns == self._download_columns:
+            return
+        self._download_columns = columns
+        # Sadece Indirme sayfasindayken (kullanici baska bir sayfaya
+        # gecmisse _download_body cocuklari zaten baska seyler olabilir)
+        # yeniden kur.
+        if self.current_page == "download":
+            self._refresh_download_cards()
+
+    def _refresh_download_cards(self) -> None:
+        body = getattr(self, "_download_body", None)
+        if body is None:
+            return
+        for widget in body.winfo_children():
+            widget.destroy()
+
+        if not self.output_dir.exists():
+            tk.Label(
+                body, text="📁  Klasör henüz oluşturulmadı (ilk indirmede oluşacak)",
+                bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            ).pack(fill="x", pady=8)
+            return
+
+        download_data = collect_download_overview(self.output_dir)
+
+        if not download_data:
+            tk.Label(
+                body, text="Henüz hiç ders klasörü yok.",
+                bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            ).pack(fill="x", pady=8)
+            return
+
+        self._build_download_summary_strip(body, download_data)
+
+        for course_dir, exams in download_data:
+            self._build_course_section(body, course_dir, exams)
+
+    def _build_download_summary_strip(self, body: tk.Widget, download_data) -> None:
+        summary = summarize_download_overview(download_data)
+        if summary is None:
+            return
+
+        stats = [
+            (str(summary["total_exams"]), "sınav", COLOR_TEXT),
+            (
+                f"{summary['captured_sum']}/{summary['roster_total_sum']}", "toplam yakalama",
+                COLOR_TEXT,
+            ),
+            (
+                str(summary["exams_with_missing"]), "sınavda eksik var",
+                COLOR_WARNING if summary["exams_with_missing"] else COLOR_TEXT,
+            ),
+        ]
+        if summary["top_student"] is not None:
+            name, count = summary["top_student"]
+            stats.append((name, f"en çok eksik kalan öğrenci ({count} sınav)", COLOR_TEXT))
+
+        strip = tk.Frame(body, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
+        strip.pack(fill="x", pady=(0, 20))
+        for index, (num_text, label_text, color) in enumerate(stats):
+            if index > 0:
+                tk.Frame(strip, bg=COLOR_BORDER, width=1).pack(side="left", fill="y")
+            cell = tk.Frame(strip, bg=COLOR_CARD)
+            cell.pack(side="left", fill="both", expand=True, padx=18, pady=14)
+            tk.Label(
+                cell, text=num_text, bg=COLOR_CARD, fg=color, font=("", 20, "bold"), anchor="w",
+            ).pack(fill="x")
+            tk.Label(
+                cell, text=label_text, bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_MUTED, anchor="w",
+            ).pack(fill="x")
+
+    def _build_course_section(
+        self, body: tk.Widget, course_dir: Path,
+        exams: list[tuple[Path, tuple[int, list[tuple[str, str]]] | None, int]],
+    ) -> None:
+        section = tk.Frame(body, bg=COLOR_BG)
+        section.pack(fill="x", pady=(0, 28))
+
+        tk.Label(
+            section, text=f"📁 {course_dir.name}", bg=COLOR_BG, fg=COLOR_TEXT,
+            font=("", 15, "bold"), anchor="w",
+        ).pack(fill="x", pady=(0, 10))
+
+        if not exams:
+            tk.Label(
+                section, text="Bu derste henüz sınav klasörü yok.",
+                bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_MUTED, anchor="w",
+            ).pack(fill="x")
+            return
+
+        columns = self._download_columns
+        grid = tk.Frame(section, bg=COLOR_BG)
+        grid.pack(fill="x")
+        for col in range(columns):
+            grid.grid_columnconfigure(col, weight=1, uniform="download_card")
+        for index, (exam_dir, completion, item_count) in enumerate(exams):
+            row, col = divmod(index, columns)
+            card = self._build_exam_card(grid, exam_dir, completion, item_count)
+            card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+
+    def _build_exam_card(
+        self, parent: tk.Widget, exam_dir: Path,
+        completion: tuple[int, list[tuple[str, str]]] | None, item_count: int,
+    ) -> tk.Frame:
+        card = tk.Frame(parent, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
+        inner = tk.Frame(card, bg=COLOR_CARD)
+        inner.pack(fill="both", expand=True, padx=16, pady=14)
+
+        head = tk.Frame(inner, bg=COLOR_CARD)
+        head.pack(fill="x")
+
+        if completion is not None:
+            total, missing = completion
+            captured = total - len(missing)
+            self._draw_completion_ring(head, captured, total).pack(side="left")
+            text_col = tk.Frame(head, bg=COLOR_CARD)
+            text_col.pack(side="left", padx=(12, 0), fill="x", expand=True)
+            tk.Label(
+                text_col, text=exam_dir.name, bg=COLOR_CARD, fg=COLOR_TEXT,
+                font=("", 13, "bold"), anchor="w", justify="left",
+                wraplength=DOWNLOAD_CARD_TEXT_WRAP,
+            ).pack(fill="x")
+            sub_text = "tamamlandı" if not missing else f"{len(missing)} öğrenci eksik"
+            sub_color = COLOR_SUCCESS if not missing else COLOR_WARNING
+            tk.Label(
+                text_col, text=sub_text, bg=COLOR_CARD, fg=sub_color, font=FONT_MUTED, anchor="w",
+            ).pack(fill="x")
+            if missing:
+                chip_row = tk.Frame(inner, bg=COLOR_CARD)
+                chip_row.pack(fill="x", pady=(10, 0))
+                shown = missing[:MAX_MISSING_CHIPS_PER_CARD]
+                for display_name, _student_no in shown:
+                    tk.Label(
+                        chip_row, text=f"⚠ {_truncate_chip_name(display_name)}",
+                        bg=COLOR_WARNING_SOFT, fg="#92400E", font=("", 11), padx=8, pady=3,
+                    ).pack(side="left", padx=(0, 6), pady=2)
+                remaining = len(missing) - len(shown)
+                if remaining > 0:
+                    tk.Label(
+                        chip_row, text=f"+{remaining} daha", bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 11),
+                    ).pack(side="left", padx=(2, 0))
+        else:
+            tk.Label(head, text="📁", bg=COLOR_CARD, font=_emoji_font(26)).pack(side="left")
+            text_col = tk.Frame(head, bg=COLOR_CARD)
+            text_col.pack(side="left", padx=(12, 0), fill="x", expand=True)
+            tk.Label(
+                text_col, text=exam_dir.name, bg=COLOR_CARD, fg=COLOR_TEXT,
+                font=("", 13, "bold"), anchor="w", justify="left",
+                wraplength=DOWNLOAD_CARD_TEXT_WRAP,
+            ).pack(fill="x")
+            tk.Label(
+                text_col, text=f"{item_count} öğe", bg=COLOR_CARD, fg=COLOR_MUTED,
+                font=FONT_MUTED, anchor="w",
+            ).pack(fill="x")
+
+        self._bind_click_recursive(card, lambda _e=None, d=exam_dir: self._on_exam_card_click(d))
+        return card
+
+    def _draw_completion_ring(self, parent: tk.Widget, captured: int, total: int) -> tk.Canvas:
+        """0-1 arasi tamamlanma oranini bir 'donut' halka olarak cizer -
+        tam ise (captured >= total) duz yesil bir cember, eksik varsa
+        arka planda gri bir tam cember ustune turuncu bir yay."""
+        size = 56
+        pad = 5
+        canvas = tk.Canvas(parent, width=size, height=size, bg=COLOR_CARD, highlightthickness=0)
+        complete = total > 0 and captured >= total
+        color = COLOR_SUCCESS if complete else COLOR_WARNING
+        if not complete:
+            canvas.create_oval(pad, pad, size - pad, size - pad, outline=COLOR_BORDER, width=6)
+        pct = (captured / total) if total else 0.0
+        if complete:
+            canvas.create_oval(pad, pad, size - pad, size - pad, outline=color, width=6)
+        elif pct > 0:
+            # Tk aci sistemi: 0 derece saat 3 yonu, pozitif yon SAAT
+            # YONUNUN TERSI - saat 12'den (start=90) SAAT YONUNDE
+            # ilerlemek icin extent NEGATIF verilir.
+            canvas.create_arc(
+                pad, pad, size - pad, size - pad,
+                start=90, extent=-360 * pct, style="arc", outline=color, width=6,
+            )
+        canvas.create_text(
+            size / 2, size / 2, text=f"{captured}/{total}", font=("", 10, "bold"), fill=COLOR_TEXT,
+        )
+        return canvas
+
+    def _bind_click_recursive(self, widget: tk.Misc, handler) -> None:
+        """Bir karti OLUSTURAN tum alt widget'lara (Frame/Label/Canvas)
+        ayni tiklama isleyicisini baglar - Tkinter'da tiklama olaylari
+        ust widget'a otomatik 'bubble' etmiyor, bu yuzden karta herhangi
+        bir noktasindan tiklamanin calismasi icin her cocuga tek tek
+        baglanmasi gerekiyor."""
+        try:
+            widget.bind("<Button-1>", handler)
+            widget.configure(cursor=CURSOR_HAND)  # type: ignore[call-overload]
+        except tk.TclError:
+            pass
+        for child in widget.winfo_children():
+            self._bind_click_recursive(child, handler)
+
+    def _on_exam_card_click(self, exam_dir: Path, _event=None) -> None:
+        # Eskiden bu iki durum SESSIZCE hicbir sey yapmiyordu (karta
+        # tiklanir, hicbir tepki gelmez, kullanici tekrar tekrar dener) -
+        # klasor disaridan (Finder/Explorer'dan) silinmis/tasinmis olabilir
+        # ya da isletim sisteminde dosyayi acacak bir uygulama atanmamis
+        # olabilir (bkz. open_in_file_manager'in artik bool donmesi).
+        if not exam_dir.exists():
+            messagebox.showwarning(
+                "Klasör bulunamadı",
+                f"'{exam_dir.name}' klasörü artık mevcut değil (silinmiş ya da "
+                "taşınmış olabilir).\n\n'Yenile' düğmesine basıp tekrar dene.",
+            )
+            return
+        if not open_in_file_manager(exam_dir):
+            messagebox.showwarning(
+                "Klasör açılamadı",
+                f"'{exam_dir.name}' klasörü açılamadı.",
+            )
 
     # ---------- Cikti / Log / Ayarlar / Yardim sayfalari ----------
 
@@ -1885,6 +2115,149 @@ class BlackboardGUI:
             kind="secondary", width=158,
         ).pack(side="left")
 
+        self._build_web_view_card(wrapper)
+
+    def _build_web_view_card(self, wrapper: tk.Widget) -> None:
+        """Ayarlar sayfasindaki 'Web Görünümü' karti: Indirme sayfasindaki
+        kart/tamamlanma durumunu, salt-okunur ve PIN korumali bir HTTP
+        sayfasi olarak ayni ag'daki BASKA bir cihazdan (ör. lab'daki 2.
+        bilgisayar) goruntulemeye acar/kapatir - bkz. web_view.py."""
+        card = self._make_card(wrapper)
+        card.pack(fill="x", pady=(16, 0))
+        tk.Label(
+            card.inner, text="🖥️  Canlı Durum Sayfası (Web Görünümü)",
+            bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_SECTION,
+        ).pack(anchor="w", pady=(0, 8))
+        tk.Label(
+            card.inner,
+            text="İndirme sayfasındaki sınav tamamlanma durumunu (hangi sınavda "
+            "kaç öğrencinin PDF'i geldiği), aynı ağdaki başka bir bilgisayardan "
+            "tarayıcıyla izlemeni sağlar - ör. hocanın kendi bilgisayarında bu "
+            "program açıkken, lab'daki ikinci bir bilgisayardan durumu kontrol "
+            f"etmek gibi. Tamamen salt okunur (hiçbir dosya açılmaz/silinmez), "
+            f"sayfa kendiliğinden {AUTO_REFRESH_SECONDS} saniyede bir yenilenir.",
+            bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            justify="left", wraplength=680,
+        ).pack(fill="x", pady=(0, 12))
+
+        server = self._web_view_server
+        is_running = server is not None and server.is_running
+        if is_running and server is not None:
+            info_box = tk.Frame(
+                card.inner, bg="#fbfcfe", highlightbackground=COLOR_BORDER, highlightthickness=1,
+            )
+            info_box.pack(fill="x", pady=(0, 10))
+            info_inner = tk.Frame(info_box, bg="#fbfcfe")
+            info_inner.pack(fill="x", padx=14, pady=12)
+            self._build_copy_row(info_inner, "Adres", server.url)
+            self._build_copy_row(info_inner, "PIN", server.pin, pady_top=10)
+            tk.Label(
+                card.inner,
+                text="⚠️  Bu adres, aynı Wi-Fi/ağdaki BAŞKA cihazlardan da erişilebilir "
+                "hale gelir - sadece güvendiğin bir ağda (ör. okulun iç ağı, ev "
+                "Wi-Fi'si) kullan, herkese açık/paylaşımlı bir ağda ASLA açma. "
+                "PIN'i sadece görmesini istediğin kişiyle paylaş; her 'Başlat'ta "
+                "yeni bir PIN üretilir.",
+                bg=COLOR_CARD, fg=COLOR_WARNING, font=("", 11), anchor="w",
+                justify="left", wraplength=680,
+            ).pack(fill="x", pady=(0, 12))
+            if platform.system() == "Windows":
+                # Windows, DINLEYEN (listening) bir sokete ilk kez izin
+                # verilirken genelde "Windows Defender Güvenlik Duvarı"
+                # penceresi cikarir - bu Python'un/programin bir hatasi
+                # DEGIL, isletim sisteminin normal davranisi. Kullanici
+                # "Iptal"e basarsa 2. bilgisayardan baglanti KURULAMAZ -
+                # bunu onceden bilmesi kafa karisikligini onler.
+                tk.Label(
+                    card.inner,
+                    text="🛡️  Windows'ta ilk 'Başlat'ta bir 'Güvenlik Duvarı' izni "
+                    "penceresi çıkabilir - 'İzin Ver'e basman gerekir, aksi halde "
+                    "ikinci bilgisayar bağlanamaz.",
+                    bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 11), anchor="w",
+                    justify="left", wraplength=680,
+                ).pack(fill="x", pady=(0, 12))
+            RoundedButton(
+                card.inner, text="Durdur", command=self._toggle_web_view,
+                kind="danger", width=140,
+            ).pack(anchor="w")
+        else:
+            RoundedButton(
+                card.inner, text="Başlat", command=self._toggle_web_view,
+                kind="primary", width=140,
+            ).pack(anchor="w")
+
+    def _build_copy_row(
+        self, parent: tk.Widget, label: str, value: str, pady_top: int = 0,
+    ) -> None:
+        """Bir etiket + salt-okunur (ama seçilip elle de kopyalanabilir)
+        alan + tek tıkla panoya kopyalayan bir buton satırı - Adres ve
+        PIN'in AYRI AYRI kopyalanabilmesi için (ikisi birden tek bir metin
+        bloğu olarak durursa kullanıcı istemediği kısmı da seçip
+        kopyalamak zorunda kalıyordu)."""
+        row = tk.Frame(parent, bg="#fbfcfe")
+        row.pack(fill="x", pady=(pady_top, 0))
+        tk.Label(
+            row, text=f"{label}:", bg="#fbfcfe", fg=COLOR_MUTED, font=FONT_MUTED, width=6, anchor="w",
+        ).pack(side="left")
+        entry = tk.Entry(
+            row, relief="flat", highlightthickness=1, highlightbackground=COLOR_BORDER,
+            highlightcolor=COLOR_ACCENT, bg="#fbfcfe", fg=COLOR_TEXT, font=("", 14, "bold"),
+        )
+        entry.insert(0, value)
+        entry.config(state="readonly", readonlybackground="#fbfcfe")
+        entry.pack(side="left", fill="x", expand=True, padx=(6, 8), ipady=3)
+        # Genislik, uygulamanin benzer uzunluktaki diger butonlariyla
+        # (ör. "Temizle" -> width=104) AYNI/daha genis tutuluyor -
+        # Windows'ta Segoe UI, macOS'un sistem fontundan biraz daha genis
+        # render edebiliyor; dar birakilirsa metin pill'in kenarina
+        # sıkışabilirdi.
+        copy_button: RoundedButton = RoundedButton(
+            row, text="Kopyala", command=lambda: self._copy_to_clipboard(value, copy_button),
+            kind="secondary", width=112, height=32,
+        )
+        copy_button.pack(side="left")
+
+    def _copy_to_clipboard(self, value: str, button: "RoundedButton") -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(value)
+        # Bazi platformlarda pano guncellemesinin GERCEKTEN uygulanmasi
+        # icin bir olay dongusu turu gerekiyor (bkz. Tk dokumantasyonu).
+        self.root.update()
+        # Kopyalamanin basarili oldugunu KISA bir metin degisimiyle
+        # bildiriyoruz - sessiz bir buton tiklamasinin bir sey yapip
+        # yapmadigi belirsiz kalirdi.
+        button.config(text="Kopyalandı ✓")
+
+        def _reset_label() -> None:
+            try:
+                button.config(text="Kopyala")
+            except tk.TclError:
+                # Kullanici 1.5 saniye icinde baska bir sayfaya gectiyse
+                # (Ayarlar sayfasi yeniden kurulup bu buton yok edildiyse)
+                # sessizce yok say.
+                pass
+
+        self.root.after(1500, _reset_label)
+
+    def _toggle_web_view(self) -> None:
+        server = self._web_view_server
+        if server is not None and server.is_running:
+            server.stop()
+            self._web_view_server = None
+        else:
+            new_server = WebViewServer(self.output_dir)
+            try:
+                new_server.start()
+            except RuntimeError as exc:
+                messagebox.showerror("Web görünümü başlatılamadı", str(exc))
+                return
+            self._web_view_server = new_server
+        # Ayarlar sayfasini yeniden kurup URL/PIN/dugme metnini guncel
+        # duruma gore tazeliyoruz - bu sayfada canli kuyruk-tabanli bir
+        # guncelleme mekanizmasi yok (Ana Sayfa'nin aksine), tam yeniden
+        # kurmak en basit dogru cozum.
+        self._show_page("settings")
+
     def _build_help_page(self, parent: tk.Widget) -> None:
         # Bu sayfa artik 5 adim + "Öğrenci Tara" detay karti + Chrome
         # uyarisi bir arada barindiriyor - kucuk pencerelerde tum bunlar
@@ -1950,6 +2323,68 @@ class BlackboardGUI:
             "Örnek:  Kısa Sınav 1_2420171019_Ahmet-Yılmaz.pdf",
             bg="#fbfcfe", fg=COLOR_TEXT, font=("", 12), anchor="w",
             justify="left", wraplength=650, padx=12, pady=10,
+        ).pack(fill="x")
+
+        # "İndirme" sayfasindaki kart gorunumunu de ayni sekilde (kisa
+        # onboarding etiketinin otesinde) somut olarak anlatiyoruz - bu
+        # ozellik dogrudan yukaridaki 'Öğrenci Tara' listesine bagli
+        # oldugu icin hemen ardindan geliyor.
+        download_card_feature = self._make_card(wrapper)
+        download_card_feature.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            download_card_feature.inner, text="📥  İndirme Sayfası: Hangi Sınav Eksik?",
+            bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_STEP_TITLE, anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            download_card_feature.inner,
+            text="'Öğrenci Tara' çalıştırılmış bir derste, İndirme sayfasındaki her "
+            "sınav bir karta ve tamamlanma halkasına dönüşür: halka tam yeşilse "
+            "sınavdaki herkesin PDF'i gelmiş demektir; turuncuysa kartın altında "
+            "kimlerin eksik olduğu ad ve numarayla tek tek listelenir. Bir karta "
+            "tıklamak o sınavın klasörünü açar. 'Öğrenci Tara' hiç çalıştırılmamış "
+            "bir derste kartlar eskisi gibi sade (sadece dosya sayısı) görünür.",
+            bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            justify="left", wraplength=680,
+        ).pack(fill="x", pady=(4, 10))
+        download_example_box = tk.Frame(
+            download_card_feature.inner, bg="#fbfcfe",
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+        )
+        download_example_box.pack(fill="x")
+        tk.Label(
+            download_example_box,
+            text="🟢  Vize 1      4/4 öğrenci   —   tamamlandı\n"
+            "🟠  Final       3/4 öğrenci   —   1 öğrenci eksik\n"
+            "        ⚠ Ayşe Yılmaz",
+            bg="#fbfcfe", fg=COLOR_TEXT, font=("", 12), anchor="w",
+            justify="left", wraplength=650, padx=12, pady=10,
+        ).pack(fill="x")
+
+        web_view_feature = self._make_card(wrapper)
+        web_view_feature.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            web_view_feature.inner, text="🌐  Web Görünümü: Durumu Başka Bir Bilgisayardan İzle",
+            bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_STEP_TITLE, anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            web_view_feature.inner,
+            text="Ayarlar sayfasındaki 'Canlı Durum Sayfası' kartından 'Başlat'a "
+            "basınca, İndirme sayfasındaki AYNI kart görünümü, aynı ağdaki başka "
+            "bir bilgisayardan (ör. lab'daki ikinci bilgisayar) tarayıcıyla "
+            "izlenebilir hale gelir - salt okunur, hiçbir dosya açılmaz/silinmez, "
+            "5 saniyede bir kendiliğinden yenilenir. Erişim, her 'Başlat'ta yeniden "
+            "üretilen 6 haneli bir PIN ile korunur; adres ve PIN, Ayarlar "
+            "sayfasındaki 'Kopyala' düğmeleriyle ayrı ayrı kopyalanabilir.",
+            bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            justify="left", wraplength=680,
+        ).pack(fill="x", pady=(4, 10))
+        tk.Label(
+            web_view_feature.inner,
+            text="⚠️  Bu adres aynı Wi-Fi/ağdaki başka cihazlardan da erişilebilir "
+            "olur - sadece güvendiğin bir ağda (ör. okulun iç ağı, ev Wi-Fi'si) "
+            "kullan, herkese açık/paylaşımlı bir ağda asla açma.",
+            bg=COLOR_CARD, fg=COLOR_WARNING, font=("", 11), anchor="w",
+            justify="left", wraplength=680,
         ).pack(fill="x")
 
         # Yardim sayfasi zaten "nasil calisir" bilgisi almaya gelinen bir
@@ -2981,6 +3416,14 @@ class BlackboardGUI:
         if self._exiting:
             return
         self._exiting = True
+
+        # Web Görünümü (bkz. Ayarlar sayfası) Playwright worker thread'inden
+        # TAMAMEN bagimsiz calisiyor - asagidaki tarayici kapatma bekleme
+        # dongusune hic girmeden hemen durdurulabilir, aksi halde program
+        # kapandiktan SONRA bile arka planda acik bir HTTP sunucusu kalirdi.
+        if self._web_view_server is not None:
+            self._web_view_server.stop()
+            self._web_view_server = None
 
         exit_button = getattr(self, "safe_exit_button", None)
         if exit_button is not None:

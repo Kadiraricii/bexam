@@ -16,6 +16,7 @@ import tkinter as tk
 
 import pytest
 
+import common
 import gui as gui_module
 from conftest import (
     _fake_sync_playwright,
@@ -163,6 +164,24 @@ def test_chrome_flag_notice_starts_expanded_on_help_page(gui_app):
     detail = find_labels_containing(gui_app.container, "Chrome açılışta aşağıdaki")[0]
 
     assert is_currently_packed(detail.master)
+
+
+def test_help_page_explains_download_card_view(gui_app):
+    """Yardim sayfasinin, Indirme sayfasindaki yeni kart/tamamlanma
+    halkasi ozelligini de (Ogrenci Tara detay kartinin hemen ardindan)
+    aciklayan bir kart icerdigini dogrular."""
+    gui_app._finish_onboarding()
+    gui_app._show_page("help")
+    gui_app.root.update_idletasks()
+
+    assert find_labels_containing(gui_app.container, "İndirme Sayfası: Hangi Sınav Eksik?")
+    assert find_labels_containing(gui_app.container, "tamamlanma halkasına")
+
+
+def test_onboarding_features_mention_missing_student_tracking(gui_app):
+    """Onboarding ekranindaki ozellik listesinin (ONBOARDING_FEATURES)
+    yeni 'eksik ogrenci takibi' vurgusunu da icerdigini dogrular."""
+    assert find_labels_containing(gui_app.container, "Eksik Takibi")
 
 
 def test_chrome_flag_notice_chevron_expands_and_collapses_on_click(gui_app):
@@ -472,7 +491,7 @@ def test_grade_center_scan_stops_immediately_when_session_dropped(gui_app, monke
     assert any("oturumun süresi dolmuş olabilir" in text for text in log_texts)
 
 
-def test_download_tree_page_handles_missing_output_directory(gui_app, tmp_path):
+def test_download_page_handles_missing_output_directory(gui_app, tmp_path):
     gui_app._finish_onboarding()
     gui_app.output_dir = tmp_path / "hic-olusmamis"
 
@@ -480,3 +499,229 @@ def test_download_tree_page_handles_missing_output_directory(gui_app, tmp_path):
     gui_app.root.update_idletasks()
 
     assert gui_app.current_page == "download"
+    assert find_labels_containing(gui_app.container, "Klasör henüz oluşturulmadı")
+
+
+def test_ideal_download_columns_scales_with_available_width(gui_app):
+    """Indirme kart izgarasinin sutun sayisinin pencere genisligine gore
+    dogru olceklendigini dogrular - pencere kucultulunce kartlar
+    sikismasin (az sutuna dusulsun), genisleyince de bos alanda dar 3
+    sutuna hapsolunmasin (daha fazla sutuna cikabilsin) diye."""
+    assert gui_app._ideal_download_columns(1) == gui_app._download_columns  # henuz yerlesmemis widget
+    assert gui_app._ideal_download_columns(260) == 1
+    assert gui_app._ideal_download_columns(519) == 1
+    assert gui_app._ideal_download_columns(520) == 2
+    assert gui_app._ideal_download_columns(780) == 3
+    # Cok genis bir ekranda bile DOWNLOAD_CARD_MAX_COLUMNS'u asmaz - asiri
+    # sayida dar/cirkin sutuna bolunmesin diye.
+    assert gui_app._ideal_download_columns(5000) == gui_module.DOWNLOAD_CARD_MAX_COLUMNS
+
+
+def test_download_grid_column_count_adapts_after_resize(gui_app, tmp_path):
+    """Bir sinav klasoru varken _apply_download_column_count cagrilinca
+    kart izgarasinin GERCEKTEN farkli sayida sutunla yeniden kuruldugunu
+    (sadece dahili sayacin degil, gercek grid widget'inin de guncellendigini)
+    dogrular."""
+    exam_dir = tmp_path / "BST020" / "Final"
+    exam_dir.mkdir(parents=True)
+    (exam_dir / "ornek.pdf").write_bytes(b"%PDF-1.4 x")
+
+    gui_app._finish_onboarding()
+    gui_app.output_dir = tmp_path
+    gui_app._show_page("download")
+    gui_app.root.update_idletasks()
+
+    gui_app._apply_download_column_count(1)
+    gui_app.root.update_idletasks()
+
+    assert gui_app._download_columns == 1
+    # "Final" basligindan yukari (text_col -> head -> inner -> card -> grid)
+    # gercek kart izgarasina cikip SADECE onun grid_size'ini kontrol
+    # ediyoruz - sayfada baska yerlerde grid kullanan baska cerceveler de
+    # olabilir, gelisigüzel ILK eslesmeyi almak yanlis widget'i test edebilirdi.
+    exam_label = find_labels_containing(gui_app.container, "Final")[0]
+    grid = exam_label.master.master.master.master.master
+    assert grid.grid_size()[0] == 1  # tek sutun
+
+
+def test_download_cards_show_missing_student_subtitle_and_chip(gui_app, tmp_path):
+    """Indirme sayfasindaki sinav kartinin roster'a gore alt basligini
+    ('N öğrenci eksik') ve eksik ogrencinin adini bir 'chip' etiketi
+    olarak gosterdigini dogrular - bkz. common.exam_roster_completion
+    ve BlackboardGUI._build_exam_card."""
+    course_dir = tmp_path / "BST020"
+    exam_dir = course_dir / "Final"
+    exam_dir.mkdir(parents=True)
+    (course_dir / common.STUDENT_ROSTER_CSV_FILENAME).write_text(
+        "Ad Soyad;Öğrenci Numarası\r\n"
+        "MEHMET KADİR ARICI;2420191035\r\n"
+        "AYŞE YILMAZ;2420171001\r\n",
+        encoding="utf-8-sig",
+    )
+    stem = common.format_student_pdf_stem("Final", "MEHMET KADİR ARICI", "2420191035")
+    (exam_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+
+    gui_app._finish_onboarding()
+    gui_app.output_dir = tmp_path
+    gui_app._show_page("download")
+    gui_app.root.update_idletasks()
+
+    assert find_labels_containing(gui_app.container, "Final")
+    assert find_labels_containing(gui_app.container, "1 öğrenci eksik")
+    assert find_labels_containing(gui_app.container, "AYŞE YILMAZ")
+
+
+def test_download_card_click_opens_exam_folder(gui_app, tmp_path, monkeypatch):
+    """Bir sinav kartina tiklamanin o sinavin klasorunu isletim
+    sisteminin dosya yoneticisinde actigini dogrular. Gercek bir tiklama
+    olayi simule ETMIYORUZ (bkz.
+    test_chrome_flag_notice_chevron_expands_and_collapses_on_click'teki
+    not: pencere withdraw() ile gizliyken sentetik <Button-1> dogru
+    yonlenmiyor) - isleyiciyi dogrudan cagiriyoruz."""
+    exam_dir = tmp_path / "BST020" / "Final"
+    exam_dir.mkdir(parents=True)
+
+    # open_in_file_manager artik bool donuyor (bkz. common.py) -
+    # sahte surumun de AYNI sozlesmeyi (basari=True) taklit etmesi
+    # gerekiyor, aksi halde _on_exam_card_click bunu BASARISIZLIK sanip
+    # gercek, TESTI SONSUZA KADAR BEKLETEN bir messagebox.showwarning
+    # penceresi acar (CANLI GOZLEMLENEN bir hata - list.append() None
+    # dondurur, bu da "falsy" sayilir).
+    opened = []
+
+    def _fake_open(path):
+        opened.append(path)
+        return True
+
+    monkeypatch.setattr(gui_module, "open_in_file_manager", _fake_open)
+
+    gui_app._on_exam_card_click(exam_dir)
+
+    assert opened == [exam_dir]
+
+
+def test_download_card_click_warns_when_open_fails(gui_app, tmp_path, monkeypatch):
+    """open_in_file_manager basarisiz olursa (False donerse) kullanicinin
+    artik sessiz kalinmayip bir uyariyla haberdar edildigini dogrular -
+    messagebox gercekten ACILMASIN diye kendisi de sahteleniyor (gercek
+    bir modal pencere test surecini sonsuza kadar bekletirdi)."""
+    exam_dir = tmp_path / "BST020" / "Final"
+    exam_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(gui_module, "open_in_file_manager", lambda p: False)
+    warnings = []
+    monkeypatch.setattr(
+        gui_module.messagebox, "showwarning", lambda title, msg: warnings.append((title, msg)),
+    )
+
+    gui_app._on_exam_card_click(exam_dir)
+
+    assert warnings and "açılamadı" in warnings[0][1]
+
+
+def test_download_card_click_warns_when_folder_missing(gui_app, tmp_path, monkeypatch):
+    """Silinmis/tasinmis bir sinav klasorune tiklaninca (bkz. Dordunctu
+    tur, madde 5) sessiz kalmak yerine acik bir uyari gosterildigini
+    dogrular - messagebox yine sahteleniyor (gercek modal pencere
+    testi sonsuza kadar bekletirdi)."""
+    exam_dir = tmp_path / "BST020" / "Hic-Olusmayan-Sinav"  # mkdir EDILMEDI
+
+    warnings = []
+    monkeypatch.setattr(
+        gui_module.messagebox, "showwarning", lambda title, msg: warnings.append((title, msg)),
+    )
+
+    gui_app._on_exam_card_click(exam_dir)
+
+    assert warnings and "bulunamadı" in warnings[0][0]
+
+
+class _FakeWebViewServer:
+    """web_view.WebViewServer'in GERCEK bir soket ACMAYAN sahte surumu -
+    Ayarlar sayfasi testleri gercek bir HTTP sunucu baslatip durdurmadan
+    ac/kapa mantigini (buton metni, URL/PIN gosterimi) sinar."""
+
+    def __init__(self, output_dir):
+        self.output_dir = output_dir
+        self.pin = "424242"
+        self.port = 9999
+        self._running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def url(self) -> str:
+        return "http://127.0.0.1:9999" if self._running else ""
+
+    def start(self) -> None:
+        self._running = True
+
+    def stop(self) -> None:
+        self._running = False
+
+
+def test_settings_web_view_card_shows_start_button_by_default(gui_app):
+    gui_app._finish_onboarding()
+    gui_app._show_page("settings")
+    gui_app.root.update_idletasks()
+
+    assert find_button_with_text(gui_app.container, "Başlat") is not None
+    assert find_button_with_text(gui_app.container, "Durdur") is None
+
+
+def test_toggle_web_view_starts_and_shows_url_and_pin(gui_app, monkeypatch):
+    monkeypatch.setattr(gui_module, "WebViewServer", _FakeWebViewServer)
+    gui_app._finish_onboarding()
+    gui_app._show_page("settings")
+    gui_app.root.update_idletasks()
+
+    gui_app._toggle_web_view()
+    gui_app.root.update_idletasks()
+
+    assert gui_app._web_view_server is not None
+    assert gui_app._web_view_server.is_running
+    entries = find_widgets(gui_app.container, lambda w: isinstance(w, tk.Entry))
+    entry_values = [e.get() for e in entries]
+    assert "424242" in entry_values
+    assert find_button_with_text(gui_app.container, "Durdur") is not None
+    assert find_button_with_text(gui_app.container, "Kopyala") is not None
+
+
+def test_toggle_web_view_twice_stops_server(gui_app, monkeypatch):
+    monkeypatch.setattr(gui_module, "WebViewServer", _FakeWebViewServer)
+    gui_app._finish_onboarding()
+    gui_app._show_page("settings")
+    gui_app.root.update_idletasks()
+
+    gui_app._toggle_web_view()
+    gui_app._toggle_web_view()
+    gui_app.root.update_idletasks()
+
+    assert gui_app._web_view_server is None
+    assert find_button_with_text(gui_app.container, "Başlat") is not None
+
+
+def test_toggle_web_view_shows_error_when_start_fails(gui_app, monkeypatch):
+    """Port hicbir denemede musait degilse (bkz. web_view.WebViewServer.start
+    - PORT_SEARCH_ATTEMPTS tukenirse RuntimeError firlatir) kullaniciya
+    ACIK bir hata gosterilmeli - messagebox GERCEKTEN acilmasin diye
+    (testi sonsuza kadar bekletmesin) o da sahteleniyor."""
+    class _FailingServer(_FakeWebViewServer):
+        def start(self) -> None:
+            raise RuntimeError("Web görünümü için uygun bir port bulunamadı.")
+
+    monkeypatch.setattr(gui_module, "WebViewServer", _FailingServer)
+    errors = []
+    monkeypatch.setattr(
+        gui_module.messagebox, "showerror", lambda title, msg: errors.append((title, msg)),
+    )
+    gui_app._finish_onboarding()
+    gui_app._show_page("settings")
+    gui_app.root.update_idletasks()
+
+    gui_app._toggle_web_view()
+
+    assert gui_app._web_view_server is None
+    assert errors and "port bulunamadı" in errors[0][1]
