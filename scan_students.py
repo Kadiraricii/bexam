@@ -19,6 +19,7 @@ Tarayici acilinca SSO ile giris yap, taranacak dersin Not Defteri >
 
 import csv
 import re
+import sys
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
@@ -30,7 +31,9 @@ from common import (
     PROFILE_DIR,
     STUDENT_ROSTER_CSV_FILENAME,
     browser_launch_kwargs,
+    clear_stale_profile_lock,
     derive_course_label,
+    is_profile_lock_error,
     resolve_active_page,
     sanitize_filename,
 )
@@ -203,47 +206,75 @@ def write_student_roster_csv(roster: list[tuple[str, str]], csv_path: Path) -> N
 
 
 def main() -> None:
+    # Windows konsolu varsayilan olarak UTF-8 olmayan bir kod sayfasi
+    # (ör. cp1254) kullanabiliyor - Turkce karakterler/tire (—) iceren
+    # print() cagrilari bu durumda UnicodeEncodeError firlatip taramayi
+    # ortadan kesebiliyordu. errors="replace" ile en kotu ihtimalde
+    # goruntu bozulur ama program COKMEZ.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(BASE_URL)
-
-        print("\nTarayici acildi.")
-        print("1) Universite SSO ile giris yap.")
-        print("2) Taranacak dersin Not Defteri > 'Öğrenciler' sekmesine git.")
-        print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.\n")
-        input("Hazir oldugunda ENTER: ")
         try:
-            page = resolve_active_page(context) or page
-        except Exception:
-            pass
-
-        course_label = derive_course_label(page)
-        course_dir = OUTPUT_DIR / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
-
-        print("Öğrenci listesi taranıyor...")
-        roster = find_student_roster(page)
-        print(f"\nDers: {course_label}")
-        print(f"{len(roster)} öğrenci bulundu.")
-
-        if not roster:
-            print(
-                "UYARI: Hiç öğrenci satırı bulunamadı. Not Defteri > "
-                "'Öğrenciler' sekmesinde olduğundan emin ol, olmadıysa "
-                "bana haber ver."
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
             )
-        else:
-            csv_path = course_dir / STUDENT_ROSTER_CSV_FILENAME
-            write_student_roster_csv(roster, csv_path)
-            print(f"CSV yazıldı: {csv_path}")
+        except Exception as exc:
+            # gui.py'deki ayni pattern: sadece PROFIL KILIDI hatasindan
+            # sonra (zorla kapatma/coke sonrasi yetim SingletonLock)
+            # temizleyip bir kez daha deniyoruz - bkz.
+            # clear_stale_profile_lock docstring'i.
+            if not is_profile_lock_error(exc):
+                raise
+            clear_stale_profile_lock(PROFILE_DIR)
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+            )
 
-        print("Tarayici acik kalacak, kapatmak icin ENTER'a bas.")
-        input()
-        context.close()
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(BASE_URL)
+
+            print("\nTarayici acildi.")
+            print("1) Universite SSO ile giris yap.")
+            print("2) Taranacak dersin Not Defteri > 'Öğrenciler' sekmesine git.")
+            print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.\n")
+            input("Hazir oldugunda ENTER: ")
+            try:
+                page = resolve_active_page(context) or page
+            except Exception:
+                pass
+
+            course_label = derive_course_label(page)
+            course_dir = OUTPUT_DIR / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
+
+            print("Öğrenci listesi taranıyor...")
+            roster = find_student_roster(page)
+            print(f"\nDers: {course_label}")
+            print(f"{len(roster)} öğrenci bulundu.")
+
+            if not roster:
+                print(
+                    "UYARI: Hiç öğrenci satırı bulunamadı. Not Defteri > "
+                    "'Öğrenciler' sekmesinde olduğundan emin ol, olmadıysa "
+                    "bana haber ver."
+                )
+            else:
+                csv_path = course_dir / STUDENT_ROSTER_CSV_FILENAME
+                write_student_roster_csv(roster, csv_path)
+                print(f"CSV yazıldı: {csv_path}")
+
+            print("Tarayici acik kalacak, kapatmak icin ENTER'a bas.")
+            input()
+        finally:
+            # Beklenmedik bir istisna (ör. Ctrl+C/KeyboardInterrupt) ya da
+            # yukaridaki akista yakalanmamis bir hata context.close()'un
+            # HIC calismamasina yol acabiliyordu - bu da PROFILE_DIR'da
+            # yetim bir SingletonLock birakip bir SONRAKI calistirmanin
+            # "user data directory is already in use" hatasiyla
+            # basarisiz olmasina neden oluyordu. finally ile close() her
+            # kosulda calismasi garanti ediliyor.
+            context.close()
 
 
 if __name__ == "__main__":

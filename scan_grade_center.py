@@ -31,6 +31,7 @@ ciktisini paylas, duzeltilir.
 
 import random
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -44,13 +45,16 @@ from common import (
     PROFILE_DIR,
     already_captured_titles,
     browser_launch_kwargs,
+    clear_stale_profile_lock,
     derive_course_label,
     exact_line_pattern,
     extract_page_info,
     format_student_pdf_stem,
+    is_profile_lock_error,
     load_student_roster,
     normalize_roster_name,
     normalize_score,
+    page_on_blackboard,
     resolve_active_page,
     sanitize_filename,
     student_pdf_identity_suffix_chars,
@@ -330,100 +334,145 @@ def capture_student(
 
 
 def main() -> None:
+    # Windows konsolu varsayilan olarak UTF-8 olmayan bir kod sayfasi
+    # (ör. cp1254) kullanabiliyor - Turkce karakterler/tire (—) iceren
+    # print() cagrilari bu durumda UnicodeEncodeError firlatip taramayi
+    # ortadan kesebiliyordu. errors="replace" ile en kotu ihtimalde
+    # goruntu bozulur ama program COKMEZ.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(BASE_URL)
-
-        print("\nTarayici acildi.")
-        print("1) Universite SSO ile giris yap.")
-        print("2) Grade Center'dan herhangi bir ogrencinin sinav sonucunu ac")
-        print("   (sol tarafta 'Ogrenciler' listesi gorunmeli).")
-        print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.\n")
-        input("Hazir oldugunda ENTER: ")
         try:
-            page = resolve_active_page(context) or page
-        except Exception:
-            pass
-
-        exam_label = derive_course_label(page)
-        exam_dir = OUTPUT_DIR / sanitize_filename(exam_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
-        # Bu bagimsiz akista Not Defteri baglami yok, exam_dir'den baska
-        # bir "ders klasoru" da yok - roster'i (varsa) bu tek klasorden
-        # okumaya calisiyoruz (bkz. scan_students.py / 'Öğrenci Tara').
-        roster = load_student_roster(exam_dir)
-
-        print("Ogrenci listesi taraniyor (kaydirarak toplaniyor)...")
-        student_rows = find_student_rows(page)
-        print(f"\nSinav: {exam_label}")
-        print(f"{len(student_rows)} ogrenci satiri bulundu.\n")
-
-        if not student_rows:
-            print(
-                "UYARI: Hic ogrenci satiri bulunamadi. Sol panelde "
-                "'Ogrenciler' sekmesinin acik oldugundan emin ol."
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+            )
+        except Exception as exc:
+            # gui.py'deki ayni pattern: sadece PROFIL KILIDI hatasindan
+            # sonra (zorla kapatma/coke sonrasi yetim SingletonLock)
+            # temizleyip bir kez daha deniyoruz - bkz.
+            # clear_stale_profile_lock docstring'i.
+            if not is_profile_lock_error(exc):
+                raise
+            clear_stale_profile_lock(PROFILE_DIR)
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
             )
 
-        captured_titles = already_captured_titles()
-        name_occurrence: dict[str, int] = {}
-        ok_count = 0
-        skip_count = 0
-        fail_count = 0
-        consecutive_failures = 0
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(BASE_URL)
 
-        for row_index, (raw_name, sidebar_score) in enumerate(student_rows):
-            occurrence = name_occurrence.get(raw_name, 0) + 1
-            name_occurrence[raw_name] = occurrence
-            display_name = raw_name if occurrence == 1 else f"{raw_name} ({occurrence})"
-
-            log_key = f"{exam_label} - {display_name}"
-            if log_key in captured_titles:
-                print(f"Atlaniyor (zaten yakalanmis): {display_name}")
-                skip_count += 1
-                continue
-
-            print(f"Yakalaniyor [{row_index + 1}/{len(student_rows)}]: {display_name} (not: {sidebar_score})")
+            print("\nTarayici acildi.")
+            print("1) Universite SSO ile giris yap.")
+            print("2) Grade Center'dan herhangi bir ogrencinin sinav sonucunu ac")
+            print("   (sol tarafta 'Ogrenciler' listesi gorunmeli).")
+            print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.\n")
+            input("Hazir oldugunda ENTER: ")
             try:
-                entry = capture_student(
-                    page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
-                    exam_name=exam_label, roster=roster,
+                page = resolve_active_page(context) or page
+            except Exception:
+                pass
+
+            exam_label = derive_course_label(page)
+            exam_dir = OUTPUT_DIR / sanitize_filename(exam_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
+            # Bu bagimsiz akista Not Defteri baglami yok, exam_dir'den baska
+            # bir "ders klasoru" da yok - roster'i (varsa) bu tek klasorden
+            # okumaya calisiyoruz (bkz. scan_students.py / 'Öğrenci Tara').
+            roster = load_student_roster(exam_dir)
+
+            print("Ogrenci listesi taraniyor (kaydirarak toplaniyor)...")
+            student_rows = find_student_rows(page)
+            print(f"\nSinav: {exam_label}")
+            print(f"{len(student_rows)} ogrenci satiri bulundu.\n")
+
+            if not student_rows:
+                print(
+                    "UYARI: Hic ogrenci satiri bulunamadi. Sol panelde "
+                    "'Ogrenciler' sekmesinin acik oldugundan emin ol."
                 )
-                print(f"  -> OK  onay={entry['onay']}  puan={entry['puan']}  pdf={entry['pdf']}")
-                if entry["bozuk_gorsel_sayisi"] > 0:
-                    print(
-                        f"  -> UYARI: {entry['bozuk_gorsel_sayisi']} gorsel bozuk/eksik "
-                        "gorunuyor, PDF'i elle kontrol et."
-                    )
-                ok_count += 1
-                consecutive_failures = 0
-            except Exception as exc:
-                print(f"  -> HATA/gonderilmemis: {exc}")
-                fail_count += 1
-                consecutive_failures += 1
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    print(
-                        f"\nUYARI: Art arda {consecutive_failures} hata olustu. "
-                        "Muhtemelen oturum dustu ya da baglanti sorunu var. "
-                        "Tarama durduruluyor - kontrol edip tekrar calistir "
-                        "(zaten yakalananlar atlanacak).\n"
-                    )
-                    break
 
-            if (row_index + 1) % BATCH_SIZE == 0:
-                print(f"  ... {BATCH_SIZE} ogrenci sonrasi kisa mola ({BATCH_PAUSE_S:.0f} sn) ...")
-                time.sleep(BATCH_PAUSE_S)
+            captured_titles = already_captured_titles()
+            name_occurrence: dict[str, int] = {}
+            ok_count = 0
+            skip_count = 0
+            fail_count = 0
+            consecutive_failures = 0
 
-        print(
-            f"\nBitti. Yakalanan: {ok_count}, atlanan: {skip_count}, "
-            f"hatali/gonderilmemis: {fail_count}."
-        )
-        print("Tarayici acik kalacak, kapatmak icin ENTER'a bas.")
-        input()
-        context.close()
+            for row_index, (raw_name, sidebar_score) in enumerate(student_rows):
+                occurrence = name_occurrence.get(raw_name, 0) + 1
+                name_occurrence[raw_name] = occurrence
+                display_name = raw_name if occurrence == 1 else f"{raw_name} ({occurrence})"
+
+                log_key = f"{exam_label} - {display_name}"
+                if log_key in captured_titles:
+                    print(f"Atlaniyor (zaten yakalanmis): {display_name}")
+                    skip_count += 1
+                    continue
+
+                print(f"Yakalaniyor [{row_index + 1}/{len(student_rows)}]: {display_name} (not: {sidebar_score})")
+                try:
+                    entry = capture_student(
+                        page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
+                        exam_name=exam_label, roster=roster,
+                    )
+                    print(f"  -> OK  onay={entry['onay']}  puan={entry['puan']}  pdf={entry['pdf']}")
+                    if entry["bozuk_gorsel_sayisi"] > 0:
+                        print(
+                            f"  -> UYARI: {entry['bozuk_gorsel_sayisi']} gorsel bozuk/eksik "
+                            "gorunuyor, PDF'i elle kontrol et."
+                        )
+                    ok_count += 1
+                    consecutive_failures = 0
+                except Exception as exc:
+                    print(f"  -> HATA/gonderilmemis: {exc}")
+                    fail_count += 1
+                    consecutive_failures += 1
+                    # Oturum dustuyse (sayfa login'e yonlendirildi) kalan HER
+                    # ogrenci de ayni sekilde basarisiz olur - devre kesicinin
+                    # 5 uzun denemeyi tuketmesini beklemek sadece zaman kaybi,
+                    # hemen net bir mesajla duruyoruz (bkz. scan_course.py'deki
+                    # ayni pattern).
+                    if not page_on_blackboard(page):
+                        print(
+                            "\nUYARI: Sayfa artık Blackboard'da görünmüyor - oturumun "
+                            "süresi dolmuş olabilir. Tarama hemen durduruldu; tekrar "
+                            "giriş yapıp taramayı tekrarla (indirilenler atlanacak).\n"
+                        )
+                        break
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        print(
+                            f"\nUYARI: Art arda {consecutive_failures} hata olustu. "
+                            "Muhtemelen oturum dustu ya da baglanti sorunu var. "
+                            "Tarama durduruluyor - kontrol edip tekrar calistir "
+                            "(zaten yakalananlar atlanacak).\n"
+                        )
+                        break
+
+                # Son ogrenciden SONRA gereksiz bir mola vermemek icin (roster
+                # boyutu BATCH_SIZE'in tam kati oldugunda onceden burada 20
+                # saniyelik bos bir bekleme oluyordu) kalan ogrenci olup
+                # olmadigi da kontrol ediliyor - bkz. scan_course.py'deki
+                # ayni koruma.
+                if (row_index + 1) % BATCH_SIZE == 0 and row_index + 1 < len(student_rows):
+                    print(f"  ... {BATCH_SIZE} ogrenci sonrasi kisa mola ({BATCH_PAUSE_S:.0f} sn) ...")
+                    time.sleep(BATCH_PAUSE_S)
+
+            print(
+                f"\nBitti. Yakalanan: {ok_count}, atlanan: {skip_count}, "
+                f"hatali/gonderilmemis: {fail_count}."
+            )
+            print("Tarayici acik kalacak, kapatmak icin ENTER'a bas.")
+            input()
+        finally:
+            # Beklenmedik bir istisna (ör. Ctrl+C/KeyboardInterrupt) ya da
+            # yukaridaki akista yakalanmamis bir hata context.close()'un
+            # HIC calismamasina yol acabiliyordu - bu da PROFILE_DIR'da
+            # yetim bir SingletonLock birakip bir SONRAKI calistirmanin
+            # "user data directory is already in use" hatasiyla
+            # basarisiz olmasina neden oluyordu. finally ile close() her
+            # kosulda calismasi garanti ediliyor.
+            context.close()
 
 
 if __name__ == "__main__":

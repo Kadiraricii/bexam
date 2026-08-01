@@ -18,6 +18,7 @@ NotSubmittedOrNotExam).
 """
 
 import re
+import sys
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -31,9 +32,11 @@ from common import (
     PROFILE_DIR,
     already_captured_titles,
     browser_launch_kwargs,
+    clear_stale_profile_lock,
     derive_course_label,
     exact_line_pattern,
     is_browser_closed_error,
+    is_profile_lock_error,
     live_url,
     load_student_roster,
     page_on_blackboard,
@@ -474,115 +477,143 @@ def capture_exam_submissions(
 
 
 def main() -> None:
+    # Windows konsolu varsayilan olarak UTF-8 olmayan bir kod sayfasi
+    # (ör. cp1254) kullanabiliyor - Turkce karakterler/tire (—) iceren
+    # print() cagrilari bu durumda UnicodeEncodeError firlatip taramayi
+    # ortadan kesebiliyordu. errors="replace" ile en kotu ihtimalde
+    # goruntu bozulur ama program COKMEZ.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(BASE_URL)
-
-        print("\nTarayici acildi.")
-        print("1) Universite SSO ile giris yap.")
-        print("2) Taranacak dersin 'Not Defteri' sayfasina git.")
-        print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.\n")
-        input("Hazir oldugunda ENTER: ")
         try:
-            page = resolve_active_page(context) or page
-        except Exception:
-            pass
-
-        grades_url = live_url(page)
-        course_label = derive_course_label(page)
-        course_dir = OUTPUT_DIR / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
-
-        exam_rows, excluded_row_names = find_exam_row_names(page)
-        print(f"\nDers: {course_label}")
-        print(f"{len(exam_rows)} satir {GRADING_STATUS_COMPLETE_MARKERS_LABEL} durumunda "
-              f"bulundu, bunlar islenecek: {[er.name for er in exam_rows]}\n")
-        if excluded_row_names:
-            print(
-                f"{len(excluded_row_names)} satir atlandi (durumu "
-                f"{GRADING_STATUS_COMPLETE_MARKERS_LABEL} degil, ör. 'Not verilecek "
-                f"bir şey yok'): {excluded_row_names}\n"
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+            )
+        except Exception as exc:
+            # gui.py'deki ayni pattern: sadece PROFIL KILIDI hatasindan
+            # sonra (zorla kapatma/coke sonrasi yetim SingletonLock)
+            # temizleyip bir kez daha deniyoruz - bkz.
+            # clear_stale_profile_lock docstring'i.
+            if not is_profile_lock_error(exc):
+                raise
+            clear_stale_profile_lock(PROFILE_DIR)
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
             )
 
-        if not exam_rows:
-            print(
-                f"UYARI: Hic {GRADING_STATUS_COMPLETE_MARKERS_LABEL} satiri bulunamadi. "
-                "Sayfa yapisi beklenenden farkli olabilir, bana haber ver."
-            )
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(BASE_URL)
 
-        captured_titles = already_captured_titles()
-        # Ogrenci bazli (her sinavdaki tek tek ogrenci PDF'leri) ve sinav
-        # bazli (hic ONAY bulunamayan/gecilen sinav SATIRLARI) sayaclar
-        # BILEREK ayri tutuluyor - aksi halde toplam sayi "elma armut"
-        # karisimi olup ne anlama geldigi belirsizlesirdi.
-        ok_count = 0
-        student_skip_count = 0
-        student_fail_count = 0
-        exam_skip_count = len(excluded_row_names)
-        exam_fail_count = 0
-
-        for exam_row in exam_rows:
-            print(f"Deneniyor: {exam_row.name}")
+            print("\nTarayici acildi.")
+            print("1) Universite SSO ile giris yap.")
+            print("2) Taranacak dersin 'Not Defteri' sayfasina git.")
+            print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.\n")
+            input("Hazir oldugunda ENTER: ")
             try:
-                exam_dir = course_dir / sanitize_filename(
-                    exam_row.name, max_chars=DEFAULT_FOLDER_MAX_CHARS
-                )
-                totals = capture_exam_submissions(
-                    page,
-                    exam_row.name,
-                    grades_url,
-                    exam_dir,
-                    course_label,
-                    exam_row.expected_submitted,
-                    captured_titles,
-                )
-                ok_count += totals["ok"]
-                student_skip_count += totals["skip"]
-                student_fail_count += totals["fail"]
-                if totals["navigation_lost"]:
-                    # capture_exam_submissions zaten UYARI'yi yazdirdi -
-                    # sayfa bilinmeyen bir durumda, bir sonraki sinava
-                    # GECMEK yanlis satirlara tiklama riski tasir.
-                    break
-            except NotSubmittedOrNotExam as exc:
-                print(f"  -> Atlandi (sinav/quiz degil ya da gonderilmemis): {exc}")
-                exam_skip_count += 1
-                try:
-                    return_to_grades_list(page, grades_url)
-                except Exception as recover_exc:
-                    # Sayfa artik Not Defteri listesinde degil - devam
-                    # etmek, bir sonraki satiri (belki gercek bir sinavi)
-                    # yanlis sayfa durumundan tiklamaya calisip zincirleme
-                    # hataya yol acar. Guvenle durmak daha iyi.
-                    print(
-                        f"  -> Kurtarma basarisiz ({recover_exc}), yanlis satirlara "
-                        "tiklama riski tasidigi icin tarama burada durduruldu."
-                    )
-                    break
-            except Exception as exc:
-                print(f"  -> HATA: {exc}")
-                exam_fail_count += 1
-                try:
-                    return_to_grades_list(page, grades_url)
-                except Exception as recover_exc:
-                    print(
-                        f"  -> Kurtarma basarisiz ({recover_exc}), yanlis satirlara "
-                        "tiklama riski tasidigi icin tarama burada durduruldu."
-                    )
-                    break
+                page = resolve_active_page(context) or page
+            except Exception:
+                pass
 
-        print(
-            f"\nBitti. Yakalanan (öğrenci PDF'i): {ok_count}\n"
-            f"Atlanan öğrenci: {student_skip_count}, hatalı öğrenci: {student_fail_count}\n"
-            f"Atlanan sınav satırı: {exam_skip_count}, hatalı sınav satırı: {exam_fail_count}."
-        )
-        print("Tarayici acik kalacak, kapatmak icin ENTER'a bas.")
-        input()
-        context.close()
+            grades_url = live_url(page)
+            course_label = derive_course_label(page)
+            course_dir = OUTPUT_DIR / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
+
+            exam_rows, excluded_row_names = find_exam_row_names(page)
+            print(f"\nDers: {course_label}")
+            print(f"{len(exam_rows)} satir {GRADING_STATUS_COMPLETE_MARKERS_LABEL} durumunda "
+                  f"bulundu, bunlar islenecek: {[er.name for er in exam_rows]}\n")
+            if excluded_row_names:
+                print(
+                    f"{len(excluded_row_names)} satir atlandi (durumu "
+                    f"{GRADING_STATUS_COMPLETE_MARKERS_LABEL} degil, ör. 'Not verilecek "
+                    f"bir şey yok'): {excluded_row_names}\n"
+                )
+
+            if not exam_rows:
+                print(
+                    f"UYARI: Hic {GRADING_STATUS_COMPLETE_MARKERS_LABEL} satiri bulunamadi. "
+                    "Sayfa yapisi beklenenden farkli olabilir, bana haber ver."
+                )
+
+            captured_titles = already_captured_titles()
+            # Ogrenci bazli (her sinavdaki tek tek ogrenci PDF'leri) ve sinav
+            # bazli (hic ONAY bulunamayan/gecilen sinav SATIRLARI) sayaclar
+            # BILEREK ayri tutuluyor - aksi halde toplam sayi "elma armut"
+            # karisimi olup ne anlama geldigi belirsizlesirdi.
+            ok_count = 0
+            student_skip_count = 0
+            student_fail_count = 0
+            exam_skip_count = len(excluded_row_names)
+            exam_fail_count = 0
+
+            for exam_row in exam_rows:
+                print(f"Deneniyor: {exam_row.name}")
+                try:
+                    exam_dir = course_dir / sanitize_filename(
+                        exam_row.name, max_chars=DEFAULT_FOLDER_MAX_CHARS
+                    )
+                    totals = capture_exam_submissions(
+                        page,
+                        exam_row.name,
+                        grades_url,
+                        exam_dir,
+                        course_label,
+                        exam_row.expected_submitted,
+                        captured_titles,
+                    )
+                    ok_count += totals["ok"]
+                    student_skip_count += totals["skip"]
+                    student_fail_count += totals["fail"]
+                    if totals["navigation_lost"]:
+                        # capture_exam_submissions zaten UYARI'yi yazdirdi -
+                        # sayfa bilinmeyen bir durumda, bir sonraki sinava
+                        # GECMEK yanlis satirlara tiklama riski tasir.
+                        break
+                except NotSubmittedOrNotExam as exc:
+                    print(f"  -> Atlandi (sinav/quiz degil ya da gonderilmemis): {exc}")
+                    exam_skip_count += 1
+                    try:
+                        return_to_grades_list(page, grades_url)
+                    except Exception as recover_exc:
+                        # Sayfa artik Not Defteri listesinde degil - devam
+                        # etmek, bir sonraki satiri (belki gercek bir sinavi)
+                        # yanlis sayfa durumundan tiklamaya calisip zincirleme
+                        # hataya yol acar. Guvenle durmak daha iyi.
+                        print(
+                            f"  -> Kurtarma basarisiz ({recover_exc}), yanlis satirlara "
+                            "tiklama riski tasidigi icin tarama burada durduruldu."
+                        )
+                        break
+                except Exception as exc:
+                    print(f"  -> HATA: {exc}")
+                    exam_fail_count += 1
+                    try:
+                        return_to_grades_list(page, grades_url)
+                    except Exception as recover_exc:
+                        print(
+                            f"  -> Kurtarma basarisiz ({recover_exc}), yanlis satirlara "
+                            "tiklama riski tasidigi icin tarama burada durduruldu."
+                        )
+                        break
+
+            print(
+                f"\nBitti. Yakalanan (öğrenci PDF'i): {ok_count}\n"
+                f"Atlanan öğrenci: {student_skip_count}, hatalı öğrenci: {student_fail_count}\n"
+                f"Atlanan sınav satırı: {exam_skip_count}, hatalı sınav satırı: {exam_fail_count}."
+            )
+            print("Tarayici acik kalacak, kapatmak icin ENTER'a bas.")
+            input()
+        finally:
+            # Beklenmedik bir istisna (ör. Ctrl+C/KeyboardInterrupt) ya da
+            # yukaridaki akista yakalanmamis bir hata context.close()'un
+            # HIC calismamasina yol acabiliyordu - bu da PROFILE_DIR'da
+            # yetim bir SingletonLock birakip bir SONRAKI calistirmanin
+            # "user data directory is already in use" hatasiyla
+            # basarisiz olmasina neden oluyordu. finally ile close() her
+            # kosulda calismasi garanti ediliyor.
+            context.close()
 
 
 if __name__ == "__main__":

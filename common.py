@@ -5,6 +5,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import TypedDict
 
 BASE_URL = "https://istinye.blackboard.com"
 
@@ -81,9 +82,11 @@ def sanitize_filename(name: str, max_chars: int = DEFAULT_FILENAME_MAX_CHARS) ->
         name = name[:max_chars].rstrip(". ")
     if not name:
         return "adsiz"
-    if name.lower() in WINDOWS_RESERVED_NAMES:
+    stem_without_ext = name.split(".")[0].strip().lower()
+    if name.lower() in WINDOWS_RESERVED_NAMES or stem_without_ext in WINDOWS_RESERVED_NAMES:
         name = f"{name}_dosya"
     return name
+
 
 
 # 'Öğrenci Tara' (scan_students.py) ile bir dersin Not Defteri > Ogrenciler
@@ -122,6 +125,50 @@ def exact_line_pattern(text: str) -> re.Pattern:
     return re.compile(rf"^{re.escape(text)}$", re.MULTILINE)
 
 
+def _read_roster_csv_rows(course_dir: Path) -> list[tuple[str, str]]:
+    """course_dir/ogrenciler.csv varsa satirlarini [(ad_soyad, ogrenci_no),
+    ...] olarak - ADLAR NORMALIZE EDILMEDEN, orijinal buyuk/kucuk harfle -
+    okur. load_student_roster (eslestirme icin normalize edilmis sozluk)
+    ile exam_roster_completion (kullaniciya GOSTERILECEK orijinal ad
+    gerekiyor) arasinda paylasilan tek okuma/dedup mantigi - ikisi ayri
+    ayri yazsaydi sessizce birbirinden kopabilirlerdi.
+
+    AYNI isim (normalize_roster_name sonrasi) CSV'de BIRDEN FAZLA kez
+    geciyorsa (ör. iki FARKLI gercek ogrenci tesaduf eseri ayni ad-soyada
+    sahipse) o isim sonuca HIC DAHIL EDILMEZ - bkz. load_student_roster
+    docstring'indeki tam gerekce. Dosya yoksa ya da bozuksa BOS liste
+    doner."""
+    csv_path = course_dir / STUDENT_ROSTER_CSV_FILENAME
+    if not csv_path.exists():
+        return []
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+            # delimiter=';': scan_students.write_student_roster_csv ile
+            # AYNI ayiraci kullanmak ZORUNDA (Turkiye Excel varsayilani) -
+            # tutmazsa her satir TEK alan olarak okunur, len(row) < 2
+            # kontrolu asagida HEPSINI sessizce eler, roster BOS doner.
+            reader = csv.reader(f, delimiter=";")
+            next(reader, None)  # baslik satiri
+            rows = [
+                (row[0].strip(), row[1].strip())
+                for row in reader
+                if len(row) >= 2 and row[0].strip()
+            ]
+    except (OSError, csv.Error):
+        return []
+
+    name_occurrence_counts: dict[str, int] = {}
+    for name, _student_no in rows:
+        key = normalize_roster_name(name)
+        name_occurrence_counts[key] = name_occurrence_counts.get(key, 0) + 1
+
+    return [
+        (name, student_no)
+        for name, student_no in rows
+        if name_occurrence_counts[normalize_roster_name(name)] == 1
+    ]
+
+
 def load_student_roster(course_dir: Path) -> dict[str, str]:
     """course_dir/ogrenciler.csv varsa okur, {normalize_roster_name(ad):
     kullanici_adi} sozlugu doner. Dosya yoksa (ör. 'Öğrenci Tara' hic
@@ -139,30 +186,179 @@ def load_student_roster(course_dir: Path) -> dict[str, str]:
     'numara bilinmiyor' demek COK daha guvenli - capture_student zaten
     bu durumu (roster'da bulunamayan isim) sorunsuz destekliyor, PDF
     adinda sadece o bolum atlanir, YANLIS bir numara sessizce yapistirilmaz."""
-    csv_path = course_dir / STUDENT_ROSTER_CSV_FILENAME
-    if not csv_path.exists():
-        return {}
+    return {
+        normalize_roster_name(name): student_no
+        for name, student_no in _read_roster_csv_rows(course_dir)
+    }
+
+
+def exam_roster_completion(
+    exam_dir: Path, course_dir: Path
+) -> tuple[int, list[tuple[str, str]]] | None:
+    """Indirme agacinda 'eksik ogrenci' rozetini/listesini beslemek icin:
+    course_dir/ogrenciler.csv roster'i ile exam_dir'deki mevcut PDF'leri
+    karsilastirir, (sayilabilir_toplam_ogrenci, eksik_liste) dondurur.
+    eksik_liste: exam_dir'de HENUZ PDF'i olmayan [(ad_soyad, ogrenci_no),
+    ...] - ad_soyad orijinal (normalize EDILMEMIS) bicimde, ekranda
+    gosterilebilir.
+
+    Roster hic taranmamissa (CSV yok) None doner - cagiran taraf ozelligi
+    sessizce gizler, aksi halde her sinav klasorunde "roster yok" uyarisi
+    gosterip 'Öğrenci Tara' hic kullanilmayan projelerde gurultu yaratirdi.
+
+    Eslestirme PDF DOSYA ADINDAKI OGRENCI NUMARASINA gore yapilir (isme
+    GORE DEGIL): format_student_pdf_stem uretilen dosya adina numarayi
+    HER ZAMAN '_{no}_' bicimindeki ayirici alt cizgilerle ekliyor (bkz. o
+    fonksiyonun ve student_pdf_identity_suffix_chars'in docstring'i) - bu
+    da isim buyuk/kucuk harf farki, Turkce I/İ, bosluk->tire donusumu gibi
+    hicbir bicimsel kaygi tasimadan guvenilir bir eslestirme sagliyor.
+    Roster'da ogrenci NUMARASI BOS olan satirlar (ör. Blackboard'dan
+    kullanici adi cekilemedi) bu yontemle guvenilir eslesTIRILEMEDIGI
+    icin ne 'eksik' ne 'yakalanmis' sayilir, sonuca HIC DAHIL EDILMEZ.
+
+    already_captured_titles ile AYNI MIN_VALID_PDF_BYTES esigi burada da
+    uygulanir: PDF tam yazilirken elektrik kesilirse/uygulama cokerse
+    diskte YARIM (acilamayan) bir dosya kalabilir - bu kontrol olmadan
+    o ogrenci yanlislikla 'yakalanmis' (yesil/tam) sayilirdi, halbuki
+    PDF'i gercekte bozuk/eksik."""
+    roster_rows = [(name, no) for name, no in _read_roster_csv_rows(course_dir) if no]
+    if not roster_rows:
+        return None
     try:
-        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-            # delimiter=';': scan_students.write_student_roster_csv ile
-            # AYNI ayiraci kullanmak ZORUNDA (Turkiye Excel varsayilani) -
-            # tutmazsa her satir TEK alan olarak okunur, len(row) < 2
-            # kontrolu asagida HEPSINI sessizce eler, roster BOS doner.
-            reader = csv.reader(f, delimiter=";")
-            next(reader, None)  # baslik satiri
-            rows = [
-                (normalize_roster_name(row[0]), row[1].strip())
-                for row in reader
-                if len(row) >= 2 and row[0].strip()
-            ]
-    except (OSError, csv.Error):
-        return {}
+        pdf_paths = [p for p in exam_dir.iterdir() if p.suffix.lower() == ".pdf"]
+    except OSError:
+        pdf_paths = []
+    existing_stems = []
+    for pdf_path in pdf_paths:
+        try:
+            if pdf_path.stat().st_size >= MIN_VALID_PDF_BYTES:
+                existing_stems.append(pdf_path.stem.lower())
+        except OSError:
+            # Dosya iterdir() ile stat() arasinda silinmis/tasinmis olabilir -
+            # yakalanmamis say, sonraki taramada yeniden denenir.
+            continue
+    missing = []
+    for display_name, student_no in roster_rows:
+        marker = f"_{student_no.lower()}_"
+        marker_suffix = f"_{student_no.lower()}"
+        if not any(marker in stem or stem.endswith(marker_suffix) or stem == student_no.lower() for stem in existing_stems):
+            missing.append((display_name, student_no))
 
-    name_occurrence_counts: dict[str, int] = {}
-    for name, _student_no in rows:
-        name_occurrence_counts[name] = name_occurrence_counts.get(name, 0) + 1
+    return len(roster_rows), missing
 
-    return {name: student_no for name, student_no in rows if name_occurrence_counts[name] == 1}
+
+# Bir sinav klasorunun tamamlanma bilgisi: exam_roster_completion'in
+# donusu (roster yoksa None) - Indirme sayfasindaki kart izgarasi ve
+# web_view.py'nin salt-okunur uzak gorunumu AYNI bu tipi kullanir.
+ExamCompletion = tuple[int, list[tuple[str, str]]] | None
+DownloadOverview = list[tuple[Path, list[tuple[Path, ExamCompletion, int]]]]
+
+
+def collect_download_overview(output_dir: Path) -> DownloadOverview:
+    """output_dir altindaki her ders icin (course_dir, [(sinav_dir,
+    tamamlanma, oge_sayisi), ...]) listesi uretir - Tkinter Indirme
+    sayfasindaki kart izgarasi ile web_view.py'nin uzaktan-goruntuleme
+    sayfasi AYNI bu fonksiyonu paylasir (tek veri kaynagi, iki ayri
+    yerde birbirinden sessizce kopabilecek iki kopya mantik yerine).
+
+    oge_sayisi SADECE tamamlanma None ise (roster yoksa, kart eski
+    'X öğe' dususe geri dusuyorsa) hesaplaniyor - roster VARSA zaten
+    gosterilmeyecek bir sayi icin exam_dir'i ikinci kez taramanin
+    (exam_roster_completion zaten kendi PDF listesini cikariyor) anlami
+    yok, buyuk cikti klasorlerinde gereksiz G/Ç.
+
+    output_dir yoksa ya da okunamiyorsa BOS liste doner - cagiran taraf
+    bunu 'henuz hic cikti yok' olarak yorumlar, hata firlatmaz."""
+    if not output_dir.exists():
+        return []
+    try:
+        course_dirs = sorted(
+            (p for p in output_dir.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=lambda p: p.name.lower(),
+        )
+    except OSError:
+        return []
+
+    data: DownloadOverview = []
+    for course_dir in course_dirs:
+        try:
+            exam_dirs = sorted(
+                (p for p in course_dir.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                key=lambda p: p.name.lower(),
+            )
+        except OSError:
+            exam_dirs = []
+        exams: list[tuple[Path, ExamCompletion, int]] = []
+        for exam_dir in exam_dirs:
+            completion = exam_roster_completion(exam_dir, course_dir)
+            item_count = 0
+            if completion is None:
+                try:
+                    item_count = sum(1 for p in exam_dir.iterdir() if not p.name.startswith("."))
+                except OSError:
+                    item_count = 0
+            exams.append((exam_dir, completion, item_count))
+        data.append((course_dir, exams))
+    return data
+
+
+class DownloadOverviewSummary(TypedDict):
+    total_exams: int
+    captured_sum: int
+    roster_total_sum: int
+    exams_with_missing: int
+    # (ad_soyad, kac_ayri_sinavda_eksik) - hicbir sinavda eksik yoksa None.
+    top_student: tuple[str, int] | None
+
+
+def summarize_download_overview(data: DownloadOverview) -> DownloadOverviewSummary | None:
+    """collect_download_overview cikisindan ozet istatistikler cikarir -
+    Indirme sayfasindaki ozet serit ile web_view.py'nin uzak-goruntuleme
+    sayfasi AYNI bu fonksiyonu paylasir.
+
+    Hicbir sinav klasorunde roster (ogrenciler.csv) yoksa None doner -
+    cagiran taraf ozet seridi hic gostermez (roster hic taranmamis bir
+    projede 'X sinavda eksik' gibi anlamsiz/gurultu bir mesaj yerine)."""
+    total_exams = 0
+    captured_sum = 0
+    roster_total_sum = 0
+    exams_with_missing = 0
+    has_any_roster = False
+    # Ogrenci basina (numarayla anahtarli - isim tek basina AYNI ogrenciyi
+    # garanti etmez) kac AYRI sinavda eksik ciktigi sayaci - "en cok eksik
+    # kalan ogrenci" rozeti icin.
+    missing_tally: dict[str, tuple[int, str]] = {}
+    for _course_dir, exams in data:
+        for _exam_dir, completion, _item_count in exams:
+            total_exams += 1
+            if completion is None:
+                continue
+            has_any_roster = True
+            total, missing = completion
+            captured_sum += total - len(missing)
+            roster_total_sum += total
+            if missing:
+                exams_with_missing += 1
+            for display_name, student_no in missing:
+                key = student_no or display_name
+                count, _name = missing_tally.get(key, (0, display_name))
+                missing_tally[key] = (count + 1, display_name)
+
+    if not has_any_roster:
+        return None
+
+    top_student = None
+    if missing_tally:
+        _key, (count, name) = max(missing_tally.items(), key=lambda kv: kv[1][0])
+        top_student = (name, count)
+
+    return {
+        "total_exams": total_exams,
+        "captured_sum": captured_sum,
+        "roster_total_sum": roster_total_sum,
+        "exams_with_missing": exams_with_missing,
+        "top_student": top_student,
+    }
 
 
 def format_student_pdf_stem(exam_name: str, display_name: str, student_no: str | None) -> str:
@@ -305,20 +501,25 @@ def set_windows_dpi_awareness() -> None:
             pass
 
 
-def open_in_file_manager(path: Path) -> None:
+def open_in_file_manager(path: Path) -> bool:
     """Bir dosyayi/klasoru isletim sisteminin varsayilan uygulamasinda
     acar - macOS'ta `open`, Windows'ta `os.startfile`. Onceden sadece
     macOS'a ozel `open` komutu kullaniliyordu, bu Windows'ta sessizce
     hicbir sey yapmiyordu (komut bulunamiyor hatasi)."""
     system = platform.system()
-    if system == "Windows":
-        import os
+    try:
+        if system == "Windows":
+            import os
 
-        os.startfile(str(path))  # type: ignore[attr-defined]
-    elif system == "Darwin":
-        subprocess.run(["open", str(path)], check=False)
-    else:
-        subprocess.run(["xdg-open", str(path)], check=False)
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif system == "Darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+        return True
+    except Exception:
+        return False
+
 
 
 def normalize_score(text: str) -> str:

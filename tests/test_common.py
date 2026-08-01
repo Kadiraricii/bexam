@@ -38,6 +38,12 @@ def test_sanitize_filename_reserved_name_check_is_case_insensitive():
     assert result == "aux_dosya"
 
 
+def test_sanitize_filename_appends_suffix_for_reserved_name_with_extension():
+    assert common.sanitize_filename("aux.csv") == "aux.csv_dosya"
+    assert common.sanitize_filename("CON.pdf") == "CON.pdf_dosya"
+
+
+
 def test_sanitize_filename_strips_trailing_dot_and_space():
     # Windows dosya adi SONUNDA nokta/bosluk kabul etmiyor.
     result = common.sanitize_filename("Final Sinavi. ")
@@ -405,6 +411,108 @@ def test_load_student_roster_returns_empty_dict_for_comma_delimited_csv(tmp_path
     assert common.load_student_roster(tmp_path) == {}
 
 
+def test_exam_roster_completion_returns_none_when_no_roster_csv(tmp_path):
+    exam_dir = tmp_path / "Final"
+    exam_dir.mkdir()
+    assert common.exam_roster_completion(exam_dir, tmp_path) is None
+
+
+def test_exam_roster_completion_matches_by_student_number_not_name_casing(tmp_path):
+    """Eslestirme PDF dosya adindaki OGRENCI NUMARASINA gore yapiliyor -
+    roster CSV'sindeki adin harf kasasi PDF dosya adindakiyle birebir
+    AYNI olmasa bile numara eslestigi surece 'yakalanmis' sayilmali."""
+    course_dir = tmp_path
+    csv_path = course_dir / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nMEHMET KADİR ARICI;2420191035\r\n",
+        encoding="utf-8-sig",
+    )
+    exam_dir = course_dir / "Final"
+    exam_dir.mkdir()
+    stem = common.format_student_pdf_stem("Final", "Mehmet Kadir Arıcı", "2420191035")
+    (exam_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+
+    assert common.exam_roster_completion(exam_dir, course_dir) == (1, [])
+
+
+def test_exam_roster_completion_lists_missing_students(tmp_path):
+    course_dir = tmp_path
+    csv_path = course_dir / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\n"
+        "MEHMET KADİR ARICI;2420191035\r\n"
+        "AYŞE YILMAZ;2420171001\r\n",
+        encoding="utf-8-sig",
+    )
+    exam_dir = course_dir / "Final"
+    exam_dir.mkdir()
+    stem = common.format_student_pdf_stem("Final", "MEHMET KADİR ARICI", "2420191035")
+    (exam_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+
+    result = common.exam_roster_completion(exam_dir, course_dir)
+    assert result is not None
+    total, missing = result
+
+    assert total == 2
+    assert missing == [("AYŞE YILMAZ", "2420171001")]
+
+
+def test_exam_roster_completion_treats_undersized_pdf_as_not_captured(tmp_path):
+    """already_captured_titles ile AYNI MIN_VALID_PDF_BYTES esigi burada
+    da uygulanmali - PDF yaziminin ortasinda kesilmesi (elektrik/coke)
+    diskte YARIM, acilamayan bir dosya birakabilir; boyut kontrolu
+    olmadan bu ogrenci yanlislikla 'yakalanmis' (rozet yesil) sayilirdi."""
+    course_dir = tmp_path
+    csv_path = course_dir / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nMEHMET KADİR ARICI;2420191035\r\n",
+        encoding="utf-8-sig",
+    )
+    exam_dir = course_dir / "Final"
+    exam_dir.mkdir()
+    stem = common.format_student_pdf_stem("Final", "MEHMET KADİR ARICI", "2420191035")
+    (exam_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4")  # sadece birkac bayt - yarim kalmis
+
+    result = common.exam_roster_completion(exam_dir, course_dir)
+    assert result is not None
+    total, missing = result
+
+    assert total == 1
+    assert missing == [("MEHMET KADİR ARICI", "2420191035")]
+
+
+def test_exam_roster_completion_excludes_rows_with_empty_student_number(tmp_path):
+    course_dir = tmp_path
+    csv_path = course_dir / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nMEHMET KADİR ARICI;\r\n",
+        encoding="utf-8-sig",
+    )
+    exam_dir = course_dir / "Final"
+    exam_dir.mkdir()
+
+    assert common.exam_roster_completion(exam_dir, course_dir) is None
+
+
+def test_exam_roster_completion_returns_none_when_exam_dir_missing(tmp_path):
+    """exam_dir henuz olusmamis olsa bile (roster var ama hic tarama
+    yapilmamis) cokmemeli - tum ogrenciler 'eksik' sayilmali."""
+    course_dir = tmp_path
+    csv_path = course_dir / common.STUDENT_ROSTER_CSV_FILENAME
+    csv_path.write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nMEHMET KADİR ARICI;2420191035\r\n",
+        encoding="utf-8-sig",
+    )
+    exam_dir = course_dir / "Final"  # olusturulmadi
+
+    result = common.exam_roster_completion(exam_dir, course_dir)
+    assert result is not None
+    total, missing = result
+
+    assert total == 1
+    assert missing == [("MEHMET KADİR ARICI", "2420191035")]
+
+
 def test_format_student_pdf_stem_converts_duplicate_name_suffix_to_clean_dash():
     """Ayni isimli 2. ogrencide display_name '... (2)' bicimini tasir
     (bkz. scan_grade_center.py occurrence mantigi) - parantezler
@@ -749,3 +857,123 @@ def test_open_in_file_manager_uses_xdg_open_on_linux(monkeypatch, tmp_path):
     common.open_in_file_manager(target)
 
     assert calls == [["xdg-open", str(target)]]
+
+
+# ---------- collect_download_overview / summarize_download_overview ----------
+# Bu ikisi Indirme sayfasindaki kart izgarasi VE web_view.py'nin uzaktan
+# goruntuleme sayfasi tarafindan PAYLASILAN tek veri kaynagi - burada veri
+# KAYBI (bir dersin/sinavin listeye hic girmemesi ya da yanlis sayilmasi)
+# olmadigini DOGRUDAN, gorsel katmandan bagimsiz olarak kanitliyoruz.
+
+def test_collect_download_overview_returns_empty_list_when_output_dir_missing(tmp_path):
+    assert common.collect_download_overview(tmp_path / "hic-olusmamis") == []
+
+
+def test_collect_download_overview_includes_every_course_and_exam_folder(tmp_path):
+    """output_dir altindaki HER ders klasorunu ve HER sinav klasorunu
+    (roster olsun olmasin) eksiksiz dondurdugunu dogrular - hicbir
+    ders/sinav sessizce atlanmamali."""
+    course_a = tmp_path / "CourseA"
+    course_a.mkdir()
+    (course_a / common.STUDENT_ROSTER_CSV_FILENAME).write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nALİ VELİ;1111\r\nAYŞE YILMAZ;2222\r\n",
+        encoding="utf-8-sig",
+    )
+    final_dir = course_a / "Final"
+    final_dir.mkdir()
+    for name, no in [("ALİ VELİ", "1111"), ("AYŞE YILMAZ", "2222")]:
+        stem = common.format_student_pdf_stem("Final", name, no)
+        (final_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+    vize_dir = course_a / "Vize"
+    vize_dir.mkdir()
+    stem = common.format_student_pdf_stem("Vize", "ALİ VELİ", "1111")
+    (vize_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+
+    # CourseB'nin roster'i YOK - eski "X öğe" dususune girmeli, ama yine
+    # de listeye GIRMELI (sessizce kaybolmamali).
+    course_b = tmp_path / "CourseB"
+    quiz_dir = course_b / "Quiz1"
+    quiz_dir.mkdir(parents=True)
+    for i in range(3):
+        (quiz_dir / f"dosya{i}.pdf").write_bytes(b"%PDF-1.4 x")
+
+    data = common.collect_download_overview(tmp_path)
+
+    course_names = [c.name for c, _exams in data]
+    assert course_names == ["CourseA", "CourseB"]
+
+    course_a_exams = {e.name: (completion, count) for e, completion, count in data[0][1]}
+    assert set(course_a_exams) == {"Final", "Vize"}
+    final_completion, _final_count = course_a_exams["Final"]
+    assert final_completion == (2, [])
+    vize_completion, _vize_count = course_a_exams["Vize"]
+    assert vize_completion == (2, [("AYŞE YILMAZ", "2222")])
+
+    course_b_exams = data[1][1]
+    assert len(course_b_exams) == 1
+    quiz_path, quiz_completion, quiz_item_count = course_b_exams[0]
+    assert quiz_path.name == "Quiz1"
+    assert quiz_completion is None
+    assert quiz_item_count == 3
+
+
+def test_summarize_download_overview_returns_none_when_no_roster_anywhere(tmp_path):
+    exam_dir = tmp_path / "CourseB" / "Quiz1"
+    exam_dir.mkdir(parents=True)
+    (exam_dir / "a.pdf").write_bytes(b"%PDF-1.4")
+
+    data = common.collect_download_overview(tmp_path)
+
+    assert common.summarize_download_overview(data) is None
+
+
+def test_summarize_download_overview_aggregates_without_data_loss(tmp_path):
+    """3 rosterli sinav (farkli derslerde) + 1 rostersiz sinavdan olusan
+    bir agacta ozet sayilarin TAM olarak beklenen degerlere esit oldugunu
+    dogrular - toplam sinav sayisi, toplam yakalama, eksik sinav sayisi
+    ve 'en cok eksik kalan ogrenci' (birden fazla derste eksik olsa bile)
+    hicbir veri kaybi olmadan dogru hesaplanmali."""
+    course_a = tmp_path / "CourseA"
+    course_a.mkdir()
+    (course_a / common.STUDENT_ROSTER_CSV_FILENAME).write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nALİ VELİ;1111\r\nAYŞE YILMAZ;2222\r\n",
+        encoding="utf-8-sig",
+    )
+    final_dir = course_a / "Final"
+    final_dir.mkdir()
+    for name, no in [("ALİ VELİ", "1111"), ("AYŞE YILMAZ", "2222")]:
+        stem = common.format_student_pdf_stem("Final", name, no)
+        (final_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+    vize_dir = course_a / "Vize"
+    vize_dir.mkdir()
+    stem = common.format_student_pdf_stem("Vize", "ALİ VELİ", "1111")
+    (vize_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+    # AYŞE YILMAZ Vize'de eksik.
+
+    course_c = tmp_path / "CourseC"
+    course_c.mkdir()
+    (course_c / common.STUDENT_ROSTER_CSV_FILENAME).write_text(
+        "Ad Soyad;Öğrenci Numarası\r\nAYŞE YILMAZ;2222\r\nMEHMET DEMİR;3333\r\n",
+        encoding="utf-8-sig",
+    )
+    kisa_dir = course_c / "Kısa Sınav 1"
+    kisa_dir.mkdir()
+    stem = common.format_student_pdf_stem("Kısa Sınav 1", "MEHMET DEMİR", "3333")
+    (kisa_dir / f"{stem}.pdf").write_bytes(b"%PDF-1.4" + b"x" * common.MIN_VALID_PDF_BYTES)
+    # AYŞE YILMAZ burada da eksik - yani AYNI ogrenci 2 FARKLI derste/sinavda eksik.
+
+    # Rostersiz bir sinav - toplam sinav sayisina girmeli ama yakalama/
+    # roster toplamlarina KARISMAMALI.
+    quiz_dir = tmp_path / "CourseB" / "Quiz1"
+    quiz_dir.mkdir(parents=True)
+    (quiz_dir / "dosya.pdf").write_bytes(b"%PDF-1.4 x")
+
+    data = common.collect_download_overview(tmp_path)
+    summary = common.summarize_download_overview(data)
+
+    assert summary is not None
+    assert summary["total_exams"] == 4  # Final, Vize, Kısa Sınav 1, Quiz1
+    assert summary["captured_sum"] == 4  # Final:2 + Vize:1 + Kısa Sınav 1:1
+    assert summary["roster_total_sum"] == 6  # 2+2+2 (Quiz1 rostersiz, dahil degil)
+    assert summary["exams_with_missing"] == 2  # Vize ve Kısa Sınav 1
+    assert summary["top_student"] == ("AYŞE YILMAZ", 2)  # 2 AYRI sinavda eksik

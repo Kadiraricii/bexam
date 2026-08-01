@@ -11,6 +11,7 @@ Tarayici acilinca SSO ile giris yap, PDF almak istedigin
 donup ENTER'a bas. Ayni oturumda istedigin kadar sayfa yakalayabilirsin.
 """
 
+import sys
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
@@ -22,8 +23,10 @@ from common import (
     PROFILE_DIR,
     append_log,
     browser_launch_kwargs,
+    clear_stale_profile_lock,
     ensure_safe_full_path,
     extract_page_info,
+    is_profile_lock_error,
     live_url,
     now_stamp,
     resolve_active_page,
@@ -386,50 +389,77 @@ def capture_current_page(
 
 
 def main() -> None:
+    # Windows konsolu varsayilan olarak UTF-8 olmayan bir kod sayfasi
+    # (ör. cp1254) kullanabiliyor - Turkce karakterler/tire (—) iceren
+    # print() cagrilari bu durumda UnicodeEncodeError firlatip taramayi
+    # ortadan kesebiliyordu. errors="replace" ile en kotu ihtimalde
+    # goruntu bozulur ama program COKMEZ.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-        )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(BASE_URL)
+        try:
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+            )
+        except Exception as exc:
+            # gui.py'deki ayni pattern: sadece PROFIL KILIDI hatasindan
+            # sonra (zorla kapatma/coke sonrasi yetim SingletonLock)
+            # temizleyip bir kez daha deniyoruz - bkz.
+            # clear_stale_profile_lock docstring'i.
+            if not is_profile_lock_error(exc):
+                raise
+            clear_stale_profile_lock(PROFILE_DIR)
+            context = p.chromium.launch_persistent_context(
+                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
+            )
 
-        print("\nTarayici acildi.")
-        print("1) Universite SSO ile giris yap.")
-        print("2) PDF almak istedigin 'Degerlendirme Geri Bildirimi' sayfasina git.")
-        print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.")
-        print("Cikmak icin 'q' yazip ENTER'a bas.\n")
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(BASE_URL)
 
-        while True:
-            command = input("Hazir oldugunda ENTER (cikmak icin q): ").strip().lower()
-            if command == "q":
-                break
+            print("\nTarayici acildi.")
+            print("1) Universite SSO ile giris yap.")
+            print("2) PDF almak istedigin 'Degerlendirme Geri Bildirimi' sayfasina git.")
+            print("3) Sayfa tam yuklendiginde buraya donup ENTER'a bas.")
+            print("Cikmak icin 'q' yazip ENTER'a bas.\n")
 
-            try:
-                active_page = resolve_active_page(context) or page
-            except Exception:
-                active_page = page
-            try:
-                entry = capture_current_page(active_page)
-            except Exception as exc:
-                print(f"HATA: yakalama basarisiz oldu -> {exc}")
-                continue
+            while True:
+                command = input("Hazir oldugunda ENTER (cikmak icin q): ").strip().lower()
+                if command == "q":
+                    break
 
-            print("\nYakalandi:")
-            print(f"  Baslik          : {entry['baslik']}")
-            print(f"  Gonderim tarihi : {entry['gonderim_tarihi']}")
-            print(f"  Onay kodu       : {entry['onay']}")
-            print(f"  Puan            : {entry['puan']}")
-            print(f"  PDF             : {entry['pdf']}")
-            if entry["bozuk_gorsel_sayisi"] > 0:
-                print(
-                    f"  UYARI           : {entry['bozuk_gorsel_sayisi']} gorsel bozuk/eksik "
-                    "gorunuyor, PDF'i elle kontrol et."
-                )
-            print()
+                try:
+                    active_page = resolve_active_page(context) or page
+                except Exception:
+                    active_page = page
+                try:
+                    entry = capture_current_page(active_page)
+                except Exception as exc:
+                    print(f"HATA: yakalama basarisiz oldu -> {exc}")
+                    continue
 
-        context.close()
+                print("\nYakalandi:")
+                print(f"  Baslik          : {entry['baslik']}")
+                print(f"  Gonderim tarihi : {entry['gonderim_tarihi']}")
+                print(f"  Onay kodu       : {entry['onay']}")
+                print(f"  Puan            : {entry['puan']}")
+                print(f"  PDF             : {entry['pdf']}")
+                if entry["bozuk_gorsel_sayisi"] > 0:
+                    print(
+                        f"  UYARI           : {entry['bozuk_gorsel_sayisi']} gorsel bozuk/eksik "
+                        "gorunuyor, PDF'i elle kontrol et."
+                    )
+                print()
+        finally:
+            # Beklenmedik bir istisna (ör. Ctrl+C/KeyboardInterrupt) ya da
+            # yukaridaki dongude yakalanmamis bir hata context.close()'un
+            # HIC calismamasina yol acabiliyordu - bu da PROFILE_DIR'da
+            # yetim bir SingletonLock birakip bir SONRAKI calistirmanin
+            # "user data directory is already in use" hatasiyla
+            # basarisiz olmasina neden oluyordu. finally ile close() her
+            # kosulda calismasi garanti ediliyor.
+            context.close()
 
 
 if __name__ == "__main__":
