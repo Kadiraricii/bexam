@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from common import (
     BASE_URL,
@@ -34,7 +34,6 @@ from common import (
     browser_launch_kwargs,
     clear_stale_profile_lock,
     derive_course_label,
-    exact_line_pattern,
     is_browser_closed_error,
     is_profile_lock_error,
     live_url,
@@ -117,10 +116,30 @@ def _first_line(text: str) -> str:
     return lines[0].strip() if lines else ""
 
 
-# Ayni ihtiyacin scan_grade_center'da da dogmasiyla (ogrenci satiri
-# eslemede substring cakismasi) ortak yardimci common.exact_line_pattern'a
-# tasindi - buradaki eski _exact_line_pattern'in birebir aynisi.
-_exact_line_pattern = exact_line_pattern
+def _find_row_by_exact_name(page: Page, row_name: str) -> Locator | None:
+    """ROW_SELECTOR'daki satirlar arasinda ILK SATIRI (bkz. _first_line)
+    row_name'e TAM esit olani bulur; yoksa None.
+
+    CANLI HATA (Not Defteri indirme adiminda): eskiden
+    `page.locator(ROW_SELECTOR, has_text=_exact_line_pattern(row_name))`
+    kullaniliyordu - ama Playwright'in has_text esleyicisi, regex'i test
+    etmeden ONCE elementin metnindeki TUM satir sonlarini/bosluklari TEK
+    bir bosluga indirgiyor. exact_line_pattern'in ^...$ + MULTILINE
+    yaklasimi satir sonlarina dayaniyor - bu yuzden ad + kategori + tarih
+    + durum gibi COK sutunlu bir Not Defteri satirinda (satir sonlari
+    kaybolunca tek bir uzun metne donusuyor) regex hicbir zaman eslesmiyor,
+    `.first.click()` sonunda "Timeout 30000ms exceeded" ile patliyordu
+    (find_exam_row_names'in kullandigi buton-rolu sorunundan TAMAMEN
+    AYRI, bagimsiz bir hata). Cozum: find_exam_row_names'deki YONTEMLE
+    AYNI SEKILDE, satirin GERCEK render edilmis inner_text()'ini Python
+    tarafinda satir satir karsilastiriyoruz - browser tarafi normalizasyona
+    hic bagimli degil."""
+    rows = page.locator(ROW_SELECTOR)
+    for i in range(rows.count()):
+        candidate = rows.nth(i)
+        if _first_line(candidate.inner_text()) == row_name:
+            return candidate
+    return None
 
 
 class ExamRow(NamedTuple):
@@ -361,16 +380,16 @@ def capture_exam_submissions(
     Not Defteri'ne DONULEMEMIS demektir - cagiran taraf bu durumda bir
     sonraki sinava GECMEMELI (sayfa bilinmeyen bir durumda, yanlis
     satirlara tiklama riski var)."""
-    # has_text SUBSTRING esler - 'Vize' aranirken 'Vize Mazeret' gibi
-    # baska bir sinav satirina cakismamak icin, satirin bir SATIRININ TAM
-    # OLARAK row_name'e esit olmasini zorunlu kiliyoruz (bkz.
-    # _exact_line_pattern). ROW_SELECTOR: bkz. yukaridaki not (tr / role=row).
-    row = page.locator(ROW_SELECTOR, has_text=_exact_line_pattern(row_name)).first
-    # .first: satirda GRADING_STATUS_COMPLETE_MARKERS'tan ('Tamamlandı' ya
-    # da 'Tümüne Not Verildi') birini iceren birden fazla buton eslesirse
-    # (ör. gorunur etiket + ekran okuyucu icin gizli bir kopya) .click()
-    # Playwright'in strict-mode ihlaliyle patlar ve sinav yanlis yere
-    # "hatali" sayilirdi.
+    # bkz. _find_row_by_exact_name docstring'i: has_text/exact_line_pattern
+    # kombinasyonu COK sutunlu Not Defteri satirlarinda hicbir zaman
+    # eslesmiyordu (CANLI hata) - satiri artik Python tarafinda inner_text()
+    # karsilastirmasiyla buluyoruz.
+    row = _find_row_by_exact_name(page, row_name)
+    if row is None:
+        raise NotSubmittedOrNotExam(
+            f"'{row_name}' adinda bir Not Defteri satiri artik sayfada "
+            "bulunamadi (sayfa kaymis/degismis olabilir)."
+        )
     # find_exam_row_names'deki ayni not gecerli: durum etiketi role="button"
     # olmayabilir (ör. Liste Gorunumu). Once rol bazli aramayi dene, bulamazsa
     # satirin herhangi bir button/a alt elemanina, o da yoksa satirin
