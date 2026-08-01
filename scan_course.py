@@ -161,17 +161,27 @@ def find_exam_row_names(page: Page) -> tuple[list[ExamRow], list[str]]:
     icin (bkz. NotSubmittedOrNotExam) sadece zaman kaybi ve gereksiz
     sayfa gecisi riski demek.
 
-    Doner: (islenecek ExamRow listesi, elenen satir adlari)."""
-    complete_markers = page.get_by_role("button", name=GRADING_STATUS_COMPLETE_PATTERN)
+    Doner: (islenecek ExamRow listesi, elenen satir adlari).
+
+    NOT: durum etiketi role="button" ARANMIYOR - canli gozlemde Not
+    Defteri'nin 'Liste Gorunumu'nde (ör. ?gradebookView=list URL'i)
+    Blackboard'un bu etiketi buton rolu OLMADAN render ettigi gorulmustu;
+    role sartiyla ariyan onceki surum bu gorunumde SIFIR satir bulup
+    "bu sayfada ne yapilacagi anlasilamadi" hatasina dusuyordu. Bunun
+    yerine (asagidaki excluded_rows'la AYNI yontem) dogrudan satir
+    metnine (has_text) gore ariyoruz - hangi eleman turunde render
+    edildiginden bagimsiz calisir."""
+    status_rows = page.locator(ROW_SELECTOR, has_text=GRADING_STATUS_COMPLETE_PATTERN)
     included: list[ExamRow] = []
-    for i in range(complete_markers.count()):
-        marker = complete_markers.nth(i)
-        row_text = marker.evaluate(
-            "el => (el.closest('tr') "
-            "|| el.closest('[role=\"row\"]') "
-            "|| el.parentElement.parentElement).innerText"
-        )
+    seen_names: set[str] = set()
+    for i in range(status_rows.count()):
+        row_text = status_rows.nth(i).inner_text()
         first_line = _first_line(row_text)
+        # ROW_SELECTOR "tr, [role='row']" oldugu icin ayni satir iki kez
+        # eslesebilir (bkz. excluded_rows'daki ayni not) - tekillestiriyoruz.
+        if not first_line or first_line in seen_names:
+            continue
+        seen_names.add(first_line)
         count_match = SUBMITTED_COUNT_PATTERN.search(row_text)
         expected_submitted = int(count_match.group(1)) if count_match else None
         included.append(ExamRow(first_line, expected_submitted))
@@ -344,8 +354,19 @@ def capture_exam_submissions(
     # (ör. gorunur etiket + ekran okuyucu icin gizli bir kopya) .click()
     # Playwright'in strict-mode ihlaliyle patlar ve sinav yanlis yere
     # "hatali" sayilirdi.
+    # find_exam_row_names'deki ayni not gecerli: durum etiketi role="button"
+    # olmayabilir (ör. Liste Gorunumu). Once rol bazli aramayi dene, bulamazsa
+    # satirin herhangi bir button/a alt elemanina, o da yoksa satirin
+    # KENDISINE tikla (bkz. _enter_flexible_grading_view'daki ayni yedekleme).
     status_marker = row.get_by_role("button", name=GRADING_STATUS_COMPLETE_PATTERN).first
-    status_marker.click()
+    if status_marker.count() > 0:
+        status_marker.click()
+    else:
+        clickable = row.locator("button, a").first
+        if clickable.count() > 0:
+            clickable.click()
+        else:
+            row.click()
     _enter_flexible_grading_view(page, row_name)
 
     # ONAY metni ana icerik alaninda gorunse bile, SOL 'Ogrenciler' paneli
