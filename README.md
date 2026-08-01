@@ -107,6 +107,26 @@ sorunsuz çalışması için şunlar kod seviyesinde ele alındı:
 - **Yollar**: Tüm dosya yolları `pathlib.Path` ile oluşturuluyor (asla
   elle `/` ile birleştirilmiyor), bu da Windows'un `\` ayracıyla otomatik
   uyumlu çalışmasını sağlıyor.
+- **Ayrılmış isim + uzantı**: `sanitize_filename` önceden sadece ham
+  `"CON"` gibi tam eşleşmeleri yakalıyordu; `"CON.pdf"`, `"aux.csv"` gibi
+  uzantılı hallerini kaçırıyordu (Windows bunları da reddediyor). Artık
+  noktadan önceki kök isim ayrıca kontrol ediliyor.
+- **Terminal script'lerinde (`capture.py`, `scan_course.py`,
+  `scan_grade_center.py`, `scan_students.py`) yetim Chrome profil
+  kilidi** — `gui.py`'de zaten var olan `clear_stale_profile_lock` /
+  `is_profile_lock_error` kurtarma mantığı bu 4 bağımsız script'e de
+  eklendi; tarayıcı `try/finally` ile her koşulda kapatılıyor (eskiden
+  Ctrl+C/zorla kapatma sonrası `context.close()` hiç çalışmayıp
+  `SingletonLock` yetim kalabiliyordu).
+- **Windows konsolu Türkçe/özel karakterlerde çökebiliyordu** — Windows'un
+  varsayılan konsol kod sayfası (ör. cp1254) UTF-8 değil; `—` (tire) ve
+  Türkçe karakter içeren `print()` çağrıları `UnicodeEncodeError` ile
+  taramayı ortadan kesebiliyordu. 4 terminal script'inin `main()`'i artık
+  `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` ile açılıyor.
+- **`open_in_file_manager`** artık `try/except` ile sarmalı — dosya
+  silinmişse/uygulama atanmamışsa program çökmek yerine sessizce `False`
+  dönüyor (çağıran taraf artık bunu kontrol edip kullanıcıya haber
+  verebiliyor, bkz. aşağıdaki "İndirme Sayfası" bölümü).
 
 ## Otomatik ders tarama (scan_course.py)
 
@@ -268,7 +288,8 @@ Bu yüzden tarayıcı otomasyonu (Playwright) ile devam ediyoruz.
 | `scan_grade_center.py` | Doğrudan bir sınavın öğrenci panelindeki tüm öğrencileri yakalar (hoca hesabı, terminal — `scan_course.py`'nin de içeriden kullandığı çekirdek) |
 | `scan_students.py` | Dersin "Öğrenciler" sekmesindeki tam ad + öğrenci no listesini CSV'ye çıkarır |
 | `gui.py` | Hoca için grafik arayüz — ders/sınav seçip toplu tarama başlatma |
-| `common.py` | Sabitler, dosya adı temizleme, ONAY/GÖNDERİM TARİHİ regex çıkarımı |
+| `common.py` | Sabitler, dosya adı temizleme, ONAY/GÖNDERİM TARİHİ regex çıkarımı, İndirme kart verisi |
+| `web_view.py` | PIN korumalı, salt-okunur "Web Görünümü" HTTP sunucusu (bkz. "Web Görünümü" bölümü) |
 | `setup.sh` / `setup.bat` | Kurulum: sanal ortam + bağımlılıklar + Playwright + Chrome kontrolü (macOS-Linux / Windows) |
 | `start.sh` / `start.bat` | `gui.py`'yi sanal ortamı otomatik aktive ederek başlatır (macOS-Linux / Windows) |
 | `requirements.txt` | Python bağımlılıkları (tek dış paket: Playwright) |
@@ -438,6 +459,116 @@ Chrome'undaki oturumu miras almıyor — otomasyon kendi ayrı, temiz
 profilinde yine sıfırdan giriş yapılmasını gerektiriyor, ama bu sefer
 (umulur ki) SSO döngüye girmeden tamamlanabiliyor.
 
+## İndirme Sayfası: kart görünümü ve eksik öğrenci takibi
+
+GUI'de "İndirme" sayfası artık dosya-gezgini tarzı bir ağaç değil, **her
+sınavın kendi tamamlanma halkasıyla göründüğü bir kart ızgarası**:
+
+- Her ders kendi başlığı altında, sınavları **kart** olarak listeler. Her
+  kartta bir **tamamlanma halkası** (donut) var: yeşil + düz çember =
+  roster'daki (Öğrenci Tara ile çıkarılan `ogrenciler.csv`) tüm
+  öğrencilerin PDF'i geldi; turuncu + kısmi yay = eksik var, halkanın
+  içinde `3/4` gibi bir kesir.
+- Eksik varsa kartın altında **kimlerin eksik olduğu** ad-numara
+  etiketleri ("chip") olarak tek tek listelenir — çok kalabalık bir
+  sınıfta ilk 6 isimden sonrası "+N daha" ile özetlenir.
+- Sayfanın üstünde bir **özet şerit**: toplam sınav sayısı, toplam
+  yakalama (`X/Y`), eksik olan sınav sayısı ve **en çok eksik kalan
+  öğrenci** (kaç ayrı sınavda eksik olduğuyla birlikte) — bir dersin 8
+  sınavı varsa bile tek tek klasör açmadan "Ayşe Yılmaz 3 sınavda eksik"
+  gibi bir özet çıkarılabiliyor.
+- Bir karta tıklamak o sınavın klasörünü işletim sisteminin dosya
+  yöneticisinde (Finder/Explorer) açar — tek tek bir PDF açmak için
+  kullanılır.
+- `ogrenciler.csv` hiç üretilmemiş bir ders için kartlar eski davranışa
+  (sadece "X öğe") sessizce döner, hiçbir hata/uyarı çıkmaz.
+- **Kart ızgarası pencere genişliğine göre canlı ölçekleniyor**: sabit 3
+  sütun değil, mevcut genişlik `DOWNLOAD_CARD_MIN_WIDTH`e (260px) bölünüp
+  1 ile 4 arasında sütun sayısı hesaplanıyor — pencere küçültülünce
+  kartlar sıkışmıyor (sütun azalıyor), büyütülünce de boş alanda dar 3
+  sütuna hapsolmuyor (sütun artıyor). Sürükleyerek yeniden boyutlandırma
+  onlarca `<Configure>` olayı ateşleyebildiği için 150ms'lik bir
+  gecikmeyle (debounce) yeniden kuruluyor, kekemelik yapmıyor.
+
+**Eşleştirme mantığı** (`common.exam_roster_completion`): roster'daki her
+öğrenci için, o sınav klasöründeki PDF dosya adlarında öğrencinin
+**numarası** aranır — isme göre DEĞİL, çünkü isim Blackboard'dan farklı
+zamanlarda farklı büyük/küçük harf ya da Türkçe İ ile gelebiliyor, numara
+her zaman aynı kalıyor. `already_captured_titles` ile **aynı** boyut
+eşiği (`MIN_VALID_PDF_BYTES`, 3KB) burada da uygulanıyor — yarım kalmış/
+bozuk bir PDF yanlışlıkla "yakalanmış" sayılmıyor.
+
+Kart ızgarasını besleyen veri toplama (`common.collect_download_overview`)
+ve özet şerit hesaplaması (`common.summarize_download_overview`) `gui.py`
+dışına, `common.py`'ye taşındı — aşağıdaki "Web Görünümü" özelliği de
+**aynı** bu iki fonksiyonu kullanıyor, iki ayrı yerde birbirinden
+bağımsız (ve sessizce birbirinden kopabilecek) iki kopya mantık yok.
+
+### Web Görünümü: durumu başka bir bilgisayardan izleme
+
+Ayarlar sayfasındaki **"Canlı Durum Sayfası (Web Görünümü)"** kartı,
+İndirme sayfasındaki AYNI kart/tamamlanma verisini, aynı ağdaki **başka
+bir bilgisayardan** tarayıcıyla izlemeyi sağlıyor — ör. hocanın kendi
+bilgisayarında program açıkken, lab'daki ikinci bir bilgisayardan
+"kaç sınav eksik" diye bakabilmek için.
+
+- **Tamamen salt okunur**: hiçbir dosya açma/silme/tarama başlatma
+  endpoint'i yok, sadece görüntüleme. Eksik öğrenci listeleri saf HTML
+  `<details>/<summary>` ile (JavaScript'siz) genişletilip daraltılabiliyor
+  — bu bir sunucu isteği DEĞİL, sadece o kartın içeriğini açıp kapatan
+  yerel bir görüntü değişikliği.
+- **Otomatik yenilenir**: sayfa 5 saniyede bir kendiliğinden tazeleniyor
+  (`<meta http-equiv="refresh">`, ekstra bir JavaScript kütüphanesi
+  gerekmiyor).
+- **PIN girişi 6 kutulu, sadece rakam kabul eden bir tasarımla** (OTP/2FA
+  ekranlarındaki gibi): her kutu tek bir rakam alır, yazınca otomatik
+  bir sonraki kutuya geçer (backspace'te geri gider, yapıştırmayı da
+  destekler), rakam dışı hiçbir karakter kabul edilmez, tüm 6 kutu
+  dolmadan "Giriş" butonu pasif kalır. "Başlat"a her basışta rastgele
+  yeni bir PIN üretilir (`web_view.py`). Form **POST** ile gönderilir
+  (adres çubuğunda/tarayıcı geçmişinde düz metin olarak görünmez);
+  doğruysa 24 saat geçerli bir oturum çerezi (`HttpOnly`) ile hatırlanır,
+  sonraki otomatik yenilemelerde tekrar PIN istenmez. Yanlış PIN, IP
+  başına 60 saniyede en fazla 5 denemeyle sınırlı (kaba kuvvet
+  denemesini anlamsızlaştırır). Oturum/deneme sayaçları bir kilitle
+  (`threading.Lock`) korunuyor. Yanıtlara ayrıca temel güvenlik
+  başlıkları (`X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, önbelleklemeyi kapatan `Cache-Control`) ekleniyor.
+  Dar telefon ekranlarında (ör. 375px) PIN kutuları taşmasın diye ayrı
+  bir responsive kural var.
+- **Adres ve PIN Ayarlar sayfasında ayrı ayrı kopyalanabilir**: her
+  ikisinin de yanında kendi "Kopyala" düğmesi var, tıklayınca sadece o
+  değeri panoya alıp kısaca "Kopyalandı ✓" gösterir.
+- **Bağımlılık eklenmedi**: sunucu Python'un kendi `http.server`
+  modülüyle (tek-thread'li `HTTPServer`, `ThreadingHTTPServer` DEĞİL —
+  bkz. aşağıdaki "Sağlamlık" notu) yazıldı — QR kod gibi ek bir
+  kütüphaneye ihtiyaç duymadan, projenin "tek dış paket: Playwright"
+  özelliği korunuyor. İkinci bilgisayardan adres + PIN elle girilir.
+
+**Güvenlik modeli — dürüstçe söylemek gerekirse**: Bu bir kimlik
+doğrulama sistemi değil, aynı yerel ağdaki yetkisiz göz atmaya karşı
+hafif bir engel. Sunucu `0.0.0.0`'a bağlanıyor (ikinci bilgisayardan
+erişim için bu **gerekli**), bu yüzden trafik şifrelenmiyor (düz HTTP,
+TLS yok) ve **sadece güvendiğin bir ağda** (ör. üniversitenin iç ağı, ev
+Wi-Fi'si) kullanılmalı — herkese açık/paylaşımlı bir Wi-Fi'de **asla**.
+Öğrenci PDF'lerinin içeriği hiç sunulmuyor (sadece ad/numara/tamamlanma
+durumu), ama bu veri de kişisel olduğu için özellik varsayılan olarak
+**kapalı** başlıyor, bilerek açılması gerekiyor. Program kapanırken
+(Güvenli Çıkış ya da pencere X'i) sunucu da otomatik durduruluyor —
+arkada asılı kalmıyor.
+
+**Windows'a özel not**: Dinleyen bir soket ilk açıldığında Windows
+genelde bir "Windows Defender Güvenlik Duvarı" izin penceresi çıkarır —
+bu programın bir hatası değil, işletim sisteminin normal davranışı.
+Kullanıcı "İptal"e basarsa ikinci bilgisayar bağlanamaz; Ayarlar
+sayfasındaki Web Görünümü kartı Windows'ta bunu önceden hatırlatıyor.
+Bir isteği işlerken beklenmedik bir hata oluşursa (ör. o an kilitli bir
+dosya) sunucunun TAMAMI çökmüyor — `http.server`'ın kendi istek-başına
+hata izolasyonuna dayanıyor, sadece o istek başarısız olur, sonraki
+istek (5 saniyelik otomatik yenilemede) normal yanıtlanır; bu davranış
+`test_server_survives_render_exception_and_serves_next_request` ile
+canlı doğrulandı.
+
 ## Sağlamlık / felaket senaryoları
 
 Hoca hesabında 90 öğrenciye kadar çıkabilecek büyük sınıflarda "hepsini
@@ -579,6 +710,91 @@ eklendi (tam detay: `~/.claude/plans/streamed-painting-hanrahan.md`).
 12. **Uzun dosya adı kırpması öğrenci kimliğini yiyordu** — yukarıdaki
     "Uzun yol (MAX_PATH) sorunu" bölümünde detaylandırıldı.
 
+**Dördüncü tur — İndirme sayfasının kart tasarımı için 10 senaryo
+incelendi (6'sı düzeltildi, 4'ü bilinçli olarak kabul edilen sınırlama
+olarak dokümante edildi)**:
+
+1. **Yarım/bozuk PDF "yakalanmış" (yeşil) gösteriliyordu** — DÜZELTİLDİ.
+   `exam_roster_completion` PDF varlığına bakıyordu ama boyutuna
+   bakmıyordu; `already_captured_titles`'ın zaten kullandığı
+   `MIN_VALID_PDF_BYTES` (3KB) eşiği burada da uygulandı — elektrik
+   kesintisi/çökme sonrası yarım kalmış bir dosya artık "eksik" sayılıyor,
+   bir sonraki taramada sağlamıyla değiştiriliyor.
+2. **Her sınav klasörü gereksiz yere iki kez taranıyordu** — DÜZELTİLDİ.
+   `item_count` (roster yoksa gösterilen dosya sayısı) roster VARKEN de
+   hesaplanıyordu, ama o durumda hiç gösterilmiyordu — büyük çıktı
+   klasörlerinde gereksiz G/Ç. Artık sadece roster yoksa hesaplanıyor.
+3. **Çok uzun sınav adı kart ızgarasını bozuyordu** — DÜZELTİLDİ. Kart
+   başlığı `wraplength` olmadan doğal genişliğine göre büyüyüp 3 sütunlu
+   eşit-genişlik ızgarasını (`uniform="download_card"`) itebiliyordu;
+   artık metin kart genişliğine göre satır sarıyor.
+4. **Çok uzun öğrenci adı "eksik" etiketini taşırıyordu** — DÜZELTİLDİ.
+   Chip etiketleri sarma desteklemiyor (yan yana dizilirler); 26
+   karakteri aşan adlar artık "…" ile kırpılıyor.
+5. **Silinmiş/taşınmış bir sınav klasörüne tıklayınca hiçbir şey
+   olmuyordu** — DÜZELTİLDİ. Kullanıcı klasörü Finder/Explorer'dan silmiş
+   ya da taşımışsa karta tıklamak sessizce hiçbir tepki vermiyordu; artık
+   "klasör bulunamadı, Yenile'ye bas" diye açık bir uyarı çıkıyor.
+6. **`open_in_file_manager` başarısız olursa kullanıcı hiç haberdar
+   olmuyordu** — DÜZELTİLDİ. İzin sorunu ya da atanmış bir uygulama
+   olmaması durumunda fonksiyon artık `bool` dönüyor (bkz. yukarıdaki
+   "Windows uyumluluğu"); karta tıklama bu dönüşü kontrol edip
+   başarısızsa ayrı bir uyarı gösteriyor.
+7. **CSV'de aynı öğrenci numarası yanlışlıkla iki farklı isme
+   atanmışsa** — KABUL EDİLEN SINIRLAMA. Eşleştirme numaraya göre
+   yapıldığı için böyle bir veri-girişi hatasında iki öğrenci de aynı
+   PDF'i "kendisininmiş" gibi görebilir. Ekstra savunma eklenmedi çünkü
+   öğrenci numarasının benzersiz olması zaten CSV'nin temel varsayımı —
+   bunu ihlal eden bir kayıt olması gerçek dünyada neredeyse hiç
+   yaşanmaz, savunma kodu gereksiz karmaşıklık katardı.
+8. **Öğrenci Tara, sınav taramasından SONRA çalıştırılırsa geçmiş PDF'ler
+   hâlâ "eksik" görünür** — KABUL EDİLEN SINIRLAMA. Roster yokken
+   yakalanan bir PDF'in dosya adında öğrenci numarası hiç yer almaz;
+   sonradan roster eklense bile o PDF'ler geriye dönük yeniden
+   adlandırılmıyor, bu yüzden numaraya göre eşleştirme onları bulamaz.
+   Çözüm: mümkünse **Öğrenci Tara'yı sınav taramasından önce** çalıştır
+   (README genelinde zaten önerilen sıra).
+9. **Çok büyük çıktı klasöründe (onlarca ders/sınav) "Yenile" arayüzü
+   kısaca dondurabilir** — KABUL EDİLEN SINIRLAMA. Tüm tarama hâlâ
+   Tkinter'ın ana thread'inde senkron yapılıyor; arka plan thread'ine
+   taşımak (mevcut Playwright worker thread'inden bağımsız, ayrı bir iş)
+   şu anki tipik kullanım ölçeğinde (bir dönemde birkaç ders, ders başına
+   birkaç sınav) gerekli görülmedi.
+10. **Roster CSV'si yanlışlıkla sınav klasörüne (ders klasörüne değil)
+    konursa rozet hiç görünmez** — KABUL EDİLEN SINIRLAMA. Roster konumu
+    bilinçli olarak DERS klasörüyle sabit (`scan_students.py`'nin yazdığı
+    yerle aynı); yanlış konumda bir CSV sessizce yok sayılır, hata
+    vermez ama rozet de göstermez.
+
+**Beşinci tur — Web Görünümü'nün eklenmesiyle bulunan 3 senaryo**:
+
+1. **Test takımının tamamı (159+ test) tek seferde çalıştırılınca gerçek
+   bir Python çökmesi ("Fatal Python error: Aborted") oluyordu** —
+   DÜZELTİLDİ. `test_browser_launch.py`'nin gerçek Chrome/Playwright
+   örnekleri ile `web_view.py`'nin gerçek HTTP sunucu thread'leri aynı
+   süreçte art arda çalışınca, döngüsel çöp toplayıcının (cyclic GC)
+   yanlış anda devreye girmesi native bir uzantıyla (Playwright'ın
+   greenlet altyapısı) çakışıp süreci çökertiyordu. Kök neden izole
+   edildi (`--ignore` ile dosya dosya bisection); `gc.disable()` sorunu
+   tamamen çözüyordu ama suit'i ~20 kat yavaşlatıyordu (10sn → 270sn+).
+   `gc.freeze()` (mevcut nesne grafiğini kalıcı nesile dondürüp
+   GELECEKTEKİ taramaların kapsamından çıkarır) hem çökmeyi ortadan
+   kaldırdı hem de hızı korudu — `tests/conftest.py`'ye eklendi, 4+ kez
+   art arda doğrulandı. Not: bu SADECE test sürecini etkiliyordu, gerçek
+   uygulama normal kullanımda (tek seferde tek tarayıcı + tek web
+   sunucu) bu deseni hiç tetiklemiyor.
+2. **Ayarlar sayfasındaki "Kopyala" butonu Windows'ta metni
+   sıkıştırabilirdi** — DÜZELTİLDİ. 96px genişlik, uygulamanın benzer
+   uzunluktaki diğer butonlarından (ör. "Temizle" → 104px) dardı;
+   Windows'ta Segoe UI fontu macOS'un sistem fontundan biraz daha geniş
+   render edebiliyor. 112px'e çıkarıldı.
+3. **İndirme kartlarının başlık metni, pencere en küçük boyuttayken
+   (1160px) taşabilirdi** — DÜZELTİLDİ, ve kökten çözüldü: sabit 3 sütun
+   yerine kart ızgarası artık pencere genişliğine göre CANLI 1-4 sütun
+   arasında ölçekleniyor (bkz. yukarıdaki "İndirme Sayfası" bölümü) —
+   metin sarma sınırı da bu yeni en-kötü-durum genişliğine göre güvenlik
+   payıyla ayarlandı.
+
 **Ödev sayfalarında yanlış sekme yakalanması (içerik doğruluğu hatası)**:
 Bazı ödev "Değerlendirme Geri Bildirimi" sayfalarında iki sekme oluyor —
 sabit **"Yönergeler"** (hocanın ödev açıklaması) ve öğrencinin gönderdiği
@@ -648,6 +864,38 @@ madde 5).
   dosyasının programı kilitlemesi, yarım kalan PDF'in sonsuza dek
   atlanması) bulunup düzeltildi — tam liste yukarıdaki "Üçüncü tur"
   bölümünde.
+- ✅ Terminal script'leri (`capture.py`, `scan_course.py`,
+  `scan_grade_center.py`, `scan_students.py`) Windows'a karşı
+  sağlamlaştırıldı: yetim Chrome profil kilidi kurtarma, Windows
+  konsolunda UTF-8 zorlama, `scan_grade_center.py`'de gereksiz son
+  bekleme kaldırıldı, oturum-düşmesi erken çıkışı `scan_grade_center.py`
+  akışına da eklendi.
+- ✅ **İndirme sayfası** dosya-gezgini tarzı ağaçtan **kart/bento
+  görünümüne** çevrildi: her sınav kendi tamamlanma halkasıyla (roster'a
+  göre kaç öğrencinin PDF'i geldiği), eksikse kimlerin eksik olduğu
+  ad-numara etiketleriyle; üstte tüm dersler genelinde bir özet şerit
+  (toplam sınav, toplam yakalama, eksik sınav sayısı, en çok eksik kalan
+  öğrenci). Karta tıklamak o sınavın klasörünü dosya yöneticisinde açıyor.
+  Detaylı tasarım ve eşleştirme mantığı için yukarıdaki "İndirme Sayfası"
+  bölümüne bkz.
+- ✅ Bu yeni sayfa için 10 felaket senaryosu tarandı (6'sı düzeltildi,
+  4'ü bilinçli kabul edilen sınırlama olarak dokümante edildi) — bkz.
+  "Sağlamlık" bölümündeki "Dördüncü tur".
+- ✅ **Web Görünümü** eklendi: Ayarlar sayfasından açılıp kapatılan, PIN
+  korumalı, salt-okunur, 5 saniyede bir otomatik yenilenen bir HTTP
+  sunucusu — İndirme sayfasının kart görünümünü aynı ağdaki başka bir
+  bilgisayardan (ör. lab'daki ikinci bilgisayar) izlemeyi sağlıyor.
+  Hiçbir yeni bağımlılık eklenmedi (stdlib `http.server`), hiçbir aksiyon
+  tetiklemiyor (sadece görüntüleme). Detaylar için "Web Görünümü"
+  bölümüne bkz.
+- ✅ Onboarding ekranı ve Yardım sayfası, Eksik Takibi ve Web Görünümü
+  özelliklerini de anlatacak şekilde güncellendi.
+- ✅ **Beşinci tur**: test takımının tamamı çalıştırılınca oluşan gerçek
+  bir Python çökmesi kök nedenine kadar izlenip düzeltildi; Ayarlar ve
+  İndirme sayfalarındaki pencere-boyutu kaynaklı sıkışma riskleri (kart
+  ızgarası artık responsive, buton/metin genişlikleri güvenlik payıyla
+  düzeltildi) tarandı ve giderildi — bkz. "Sağlamlık" bölümündeki
+  "Beşinci tur".
 
 ### "Gönderimler" listesi — artık desteklenen akış
 
