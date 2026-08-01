@@ -114,6 +114,17 @@ STUDENT_STATUS_FILTER_TRIGGER_ID = "submission-list-dropdown-filters-student-sta
 STUDENT_STATUS_FILTER_LABEL = "Öğrenci Durumu"
 STUDENT_STATUS_FILTER_DEFAULT_TEXT = "Tüm Öğrenci Durumları"
 SUBMITTED_FILTER_OPTION = "Gönderildi"
+# Gönderimler tablosunun satirlari - CANLI DOM'dan alindi (kullanicinin
+# paylastigi HTML): Not Defteri'nin Ultra tablosundan FARKLI, eski
+# Angular tabanli bir bilesen. Satir: <div class="... submission-list-row
+# ...">; tiklanacak asil eleman o satirin icindeki
+# <a class="bb-click-target submission-name-wrapper ..."> (aria-label
+# "{ad} için gönderimler"); tamamlanma isareti ise SADECE gercekten
+# notlandirilmis satirlarda DOM'a giren <div class="status-is-complete">
+# (yesil tik ikonu + 'Tamamlandı' metni).
+SUBMISSION_ROW_SELECTOR = ".submission-list-row"
+SUBMISSION_ROW_LINK_SELECTOR = "a.bb-click-target"
+SUBMISSION_ROW_COMPLETE_SELECTOR = ".status-is-complete"
 # Blackboard Ultra tablolari bazen gercek <tr> yerine <div role="row">
 # olarak render edilebilir - satir ararken HER ZAMAN ikisini de kapsiyoruz,
 # aksi halde bir tarafta calisip diger tarafta hicbir satir bulunamayabilir.
@@ -155,35 +166,26 @@ def _find_row_by_exact_name(page: Page, row_name: str) -> Locator | None:
 
 
 def _first_complete_status_row(page: Page) -> Locator | None:
-    """Gönderimler tablosunda "Not Verme Durumu" TAM OLARAK 'Tamamlandı'
-    ya da 'Tümüne Not Verildi' olan ILK ogrenci satirini bulur (yoksa
-    None); hangi ogrenci oldugu onemli degil - bkz.
-    _enter_flexible_grading_view docstring (sonra sol panelden zaten
-    HEPSI tek tek gezilecek).
+    """Gönderimler tablosunda "Not Verme Durumu" TAMAMLANMIŞ olan ILK
+    ogrenci satirini bulur (yoksa None); hangi ogrenci oldugu onemli
+    degil - bkz. _enter_flexible_grading_view docstring (sonra sol
+    panelden zaten HEPSI tek tek gezilecek).
 
-    NEDEN "satirin HERHANGI bir yerinde marker geciyor mu" (has_text)
-    DEGIL DE "satirin KAC AYRI SATIRINDA marker TAM OLARAK geciyor"
-    sayiliyor: ROW_SELECTOR ("tr, [role='row']") hem TEK bir ogrenci
-    satirini hem de o satirlari SARAN bir ust kapsayiciyi eslestirebiliyor.
-    Gercek TEK bir satirda durum etiketi (ör. 'Tamamlandı') SADECE BIR
-    KEZ, kendi satirinda gecer; bu satirlari SARAN bir kapsayicida ise
-    ICINDEKI HER notlandirilmis ogrenci icin bu etiket AYRI AYRI (ör. 15
-    kez) tekrarlanir. Bu yuzden marker'in TAM OLARAK 1 kez gectigi ilk
-    adayi 'gercek yaprak satir' olarak kabul ediyoruz - CANLI hata: eski
-    kod (`page.locator(ROW_SELECTOR, has_text=...).first`) boyle bir
-    sariciyi secip icindeki ILK ogrenciye (hic gonderilmemis olsa bile)
-    tikliyordu.
-
-    'Not verilecek bir şey yok' iceren satirlar ayrica BASTAN eleniyor -
-    LISTENIN NERESINDE olursa olsun (ilk satir olma zorunlulugu yok)."""
-    rows = page.locator(ROW_SELECTOR)
+    CANLI DOM (kullanicinin paylastigi HTML): bu liste Not Defteri'nin
+    Ultra <tr>/[role='row'] tablosundan TAMAMEN FARKLI bir teknoloji -
+    eski, Angular tabanli bir bilesen. Satirlar SUBMISSION_ROW_SELECTOR
+    ('.submission-list-row') class'ina sahip div'ler, ROW_SELECTOR
+    ("tr, [role='row']") burada HICBIR satiri eslestirmiyordu (CANLI
+    hata: onceki satir sayma mantigi bu sayfada hep 0 aday bulup hicbir
+    zaman calisamazdi). Tamamlanma isareti SUBMISSION_ROW_COMPLETE_SELECTOR
+    ('.status-is-complete' - yesil tik + 'Tamamlandı' metni) SADECE
+    gercekten notlandirilmis satirlarda DOM'a giriyor - 'Not verilecek
+    bir şey yok' durumundaki satirlarda hic yok, bu yuzden ayrica onu
+    elemeye gerek kalmiyor."""
+    rows = page.locator(SUBMISSION_ROW_SELECTOR)
     for i in range(rows.count()):
         candidate = rows.nth(i)
-        lines = [line.strip() for line in candidate.inner_text().splitlines() if line.strip()]
-        if any(NOTHING_TO_GRADE_MARKER in line for line in lines):
-            continue
-        complete_line_count = sum(1 for line in lines if GRADING_STATUS_COMPLETE_PATTERN.search(line))
-        if complete_line_count == 1:
+        if candidate.locator(SUBMISSION_ROW_COMPLETE_SELECTOR).count() > 0:
             return candidate
     return None
 
@@ -445,10 +447,12 @@ def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
             "'Tümüne Not Verildi' durumunda bir ogrenci satiri bulunamadi."
         )
     try:
-        clickable = submission_row.locator("button, a").first
-        # Satirin kendisi bir buton/link ICERMEYIP dogrudan tiklanabilir
-        # yapilmis olabilir (ör. <tr onclick=...> ya da <div role="row">) -
-        # bu durumda button/a hic bulunamaz, satirin KENDISINE tikliyoruz.
+        # bkz. SUBMISSION_ROW_LINK_SELECTOR tanimindaki not - CANLI DOM'da
+        # bu satirin asil tiklanacak elemani budur (satirin KENDISINDE
+        # bb-click-to-invoke-child="a.bb-click-target" oldugu icin satirin
+        # herhangi bir yerine tiklamak da ayni sonucu vermeli, ama dogrudan
+        # linki tiklamak daha az yan-etki riski tasir).
+        clickable = submission_row.locator(SUBMISSION_ROW_LINK_SELECTOR).first
         if clickable.count() > 0:
             clickable.click(timeout=8_000)
         else:
