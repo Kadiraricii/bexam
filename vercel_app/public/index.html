@@ -6,16 +6,18 @@
   <title>BB Sınav Yakalayıcı - Bulut Canlı Görünüm</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0f172a;
-      --card-bg: rgba(30, 41, 59, 0.7);
-      --card-border: rgba(255, 255, 255, 0.1);
+      --bg: #0b0f19;
+      --card-bg: rgba(23, 32, 54, 0.75);
+      --card-border: rgba(255, 255, 255, 0.12);
       --text: #f8fafc;
       --muted: #94a3b8;
       --primary: #3b82f6;
       --primary-hover: #2563eb;
+      --primary-soft: rgba(59, 130, 246, 0.15);
+      --primary-glow: rgba(59, 130, 246, 0.4);
       --success: #22c55e;
       --warning: #f59e0b;
       --warning-soft: rgba(245, 158, 11, 0.15);
@@ -31,13 +33,15 @@
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow-x: hidden;
       background-image: 
-        radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+        radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.18) 0px, transparent 55%),
+        radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.18) 0px, transparent 55%),
+        radial-gradient(at 50% 50%, rgba(16, 185, 129, 0.08) 0px, transparent 65%);
     }
 
     .container {
-      max-width: 1100px;
+      max-width: 1200px;
       margin: 0 auto;
       padding: 24px;
       width: 100%;
@@ -48,104 +52,242 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 80vh;
+      min-height: 90vh;
+      padding: 20px;
+      position: relative;
+    }
+
+    /* Ambient Glowing Orbs */
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(80px);
+      z-index: 0;
+      pointer-events: none;
+      animation: floatOrb 10s infinite ease-in-out alternate;
+    }
+    .orb-1 { width: 300px; height: 300px; background: rgba(59, 130, 246, 0.25); top: 15%; left: 20%; }
+    .orb-2 { width: 250px; height: 250px; background: rgba(139, 92, 246, 0.25); bottom: 15%; right: 20%; animation-delay: -5s; }
+
+    @keyframes floatOrb {
+      0% { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(30px, -20px) scale(1.1); }
     }
 
     .auth-card {
+      position: relative;
+      z-index: 10;
       background: var(--card-bg);
-      backdrop-filter: blur(16px);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
       border: 1px solid var(--card-border);
-      border-radius: 20px;
-      padding: 40px;
+      border-radius: 24px;
+      padding: 44px 40px;
       width: 100%;
-      max-width: 440px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+      max-width: 460px;
+      box-shadow: 
+        inset 0 1px 0 rgba(255, 255, 255, 0.15),
+        0 30px 60px -12px rgba(0, 0, 0, 0.7);
       text-align: center;
+      animation: fadeInUp 0.5s ease-out;
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .auth-card.shake {
+      animation: shake 0.4s ease-in-out;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-10px); }
+      40%, 80% { transform: translateX(10px); }
+    }
+
+    .brand-icon-wrapper {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 20px auto;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      box-shadow: 0 10px 25px -5px var(--primary-glow);
     }
 
     .auth-card h1 {
-      font-size: 24px;
+      font-size: 26px;
       font-weight: 700;
-      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+      background: linear-gradient(to right, #ffffff, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
 
     .auth-card p {
       color: var(--muted);
       font-size: 14px;
-      margin-bottom: 28px;
+      margin-bottom: 32px;
+      line-height: 1.5;
     }
 
     .form-group {
-      margin-bottom: 20px;
+      margin-bottom: 22px;
       text-align: left;
     }
 
     .form-group label {
-      display: block;
-      font-size: 13px;
-      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 700;
       color: var(--muted);
-      margin-bottom: 6px;
+      margin-bottom: 8px;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.8px;
+    }
+
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .input-icon {
+      position: absolute;
+      left: 14px;
+      font-size: 16px;
+      color: var(--muted);
+      pointer-events: none;
     }
 
     .form-control {
       width: 100%;
-      background: rgba(15, 23, 42, 0.6);
+      background: rgba(11, 15, 25, 0.7);
       border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 12px 16px;
+      border-radius: 12px;
+      padding: 14px 16px 14px 44px;
       color: #fff;
-      font-size: 16px;
+      font-size: 15px;
       outline: none;
-      transition: all 0.2s;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .form-control-mono {
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 1.5px;
+      font-weight: 700;
+      text-transform: uppercase;
     }
 
     .form-control:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+      box-shadow: 0 0 0 4px var(--primary-glow);
+      background: rgba(11, 15, 25, 0.9);
     }
 
+    .toggle-password {
+      position: absolute;
+      right: 14px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
+      padding: 4px;
+    }
+
+    .toggle-password:hover { color: #fff; }
+
     .btn {
-      width: 100%;
-      background: var(--primary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
       color: #fff;
       border: none;
-      border-radius: 10px;
-      padding: 14px;
+      border-radius: 12px;
+      padding: 14px 24px;
       font-size: 16px;
       font-weight: 600;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 8px 20px -4px var(--primary-glow);
+      text-decoration: none;
     }
 
-    .btn:hover { background: var(--primary-hover); }
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 25px -4px var(--primary-glow);
+    }
+
+    .btn:active { transform: translateY(0); }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      border: 1px solid var(--card-border);
+      box-shadow: none;
+    }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); box-shadow: none; }
 
     .error-alert {
       background: rgba(239, 68, 68, 0.15);
       border: 1px solid rgba(239, 68, 68, 0.3);
       color: #fca5a5;
-      padding: 10px 14px;
-      border-radius: 8px;
+      padding: 12px 16px;
+      border-radius: 10px;
       font-size: 13px;
-      margin-bottom: 20px;
+      margin-bottom: 22px;
       display: none;
+      text-align: left;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .trust-badges {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 30px;
+      padding-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .trust-badge-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
     }
 
     /* Dashboard Header */
     header {
       background: var(--card-bg);
-      backdrop-filter: blur(12px);
+      backdrop-filter: blur(16px);
       border-bottom: 1px solid var(--card-border);
       padding: 16px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
 
     .logo-area { display: flex; align-items: center; gap: 12px; }
-    .logo-badge { background: var(--primary); color: #fff; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
+    .logo-badge { background: var(--primary); color: #fff; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 6px; }
 
     .live-badge {
       display: inline-flex;
@@ -154,7 +296,7 @@
       background: rgba(34, 197, 94, 0.15);
       color: #4ade80;
       border: 1px solid rgba(34, 197, 94, 0.3);
-      padding: 4px 12px;
+      padding: 5px 14px;
       border-radius: 20px;
       font-size: 13px;
       font-weight: 600;
@@ -162,19 +304,43 @@
     .live-dot { width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: pulse 1.5s infinite; }
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
 
+    /* Nav Tabs */
+    .tabs-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 12px;
+    }
+
+    .tab-btn {
+      padding: 10px 18px;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+    .tab-btn.active { color: #fff; background: var(--primary-soft); border: 1px solid rgba(59, 130, 246, 0.3); }
+
     /* Summary Stats */
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 16px;
-      margin-bottom: 32px;
+      margin-bottom: 28px;
     }
 
     .stat-card {
       background: var(--card-bg);
       backdrop-filter: blur(12px);
       border: 1px solid var(--card-border);
-      border-radius: 14px;
+      border-radius: 16px;
       padding: 20px;
     }
 
@@ -182,11 +348,11 @@
     .stat-lbl { color: var(--muted); font-size: 13px; }
 
     /* Courses & Cards */
-    .course-title { font-size: 20px; font-weight: 700; margin: 32px 0 16px 0; }
+    .course-title { font-size: 20px; font-weight: 700; margin: 32px 0 16px 0; display: flex; align-items: center; justify-content: space-between; }
 
     .card-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
       gap: 20px;
     }
 
@@ -194,8 +360,10 @@
       background: var(--card-bg);
       backdrop-filter: blur(12px);
       border: 1px solid var(--card-border);
-      border-radius: 16px;
-      padding: 20px;
+      border-radius: 18px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
     }
 
     .exam-head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
@@ -206,63 +374,110 @@
     .exam-status.ok { color: var(--success); }
     .exam-status.warn { color: var(--warning); }
 
-    .chips-area { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-    .chip {
+    /* Detailed Missing List on Card */
+    .missing-details {
+      margin-top: 14px;
+      border-top: 1px solid var(--card-border);
+      padding-top: 12px;
+    }
+
+    .missing-details summary {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--warning);
+      cursor: pointer;
+      user-select: none;
+      outline: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .missing-table-card {
+      width: 100%;
+      margin-top: 10px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .missing-table-card th {
+      text-align: left;
+      color: var(--muted);
+      padding: 6px 4px;
+      font-weight: 600;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .missing-table-card td {
+      padding: 8px 4px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    /* Master Missing Roster View */
+    .table-container {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 24px;
+    }
+
+    .search-bar-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .master-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 14px;
+    }
+
+    .master-table th {
+      background: rgba(15, 23, 42, 0.6);
+      color: var(--muted);
+      font-weight: 600;
+      padding: 12px 16px;
+      text-transform: uppercase;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .master-table td {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .master-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .badge-warn {
       background: var(--warning-soft);
       color: var(--warning-text);
       border: 1px solid rgba(245, 158, 11, 0.3);
       padding: 4px 10px;
       border-radius: 6px;
       font-size: 12px;
-      font-weight: 500;
-    }
-    .chip-more {
-      background: rgba(59, 130, 246, 0.2);
-      color: #93c5fd;
-      border: 1px solid rgba(59, 130, 246, 0.4);
-      cursor: pointer;
+      font-weight: 600;
+      display: inline-block;
     }
 
-    /* Modal */
-    .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.7);
-      backdrop-filter: blur(8px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s;
-    }
-    .modal-backdrop.active { opacity: 1; pointer-events: auto; }
-
-    .modal-box {
-      background: #1e293b;
-      border: 1px solid var(--card-border);
-      border-radius: 20px;
-      width: 90%;
-      max-width: 500px;
-      max-height: 80vh;
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+    /* Loading Spinner */
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
     }
 
-    .modal-head { padding: 20px; border-bottom: 1px solid var(--card-border); }
-    .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
-    .modal-foot { padding: 16px 20px; border-top: 1px solid var(--card-border); display: flex; justify-content: space-between; }
-
-    .missing-item {
-      display: flex;
-      justify-content: space-between;
-      padding: 10px 14px;
-      background: rgba(15, 23, 42, 0.5);
-      border-radius: 8px;
-      margin-bottom: 8px;
-      font-size: 14px;
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
   </style>
 </head>
@@ -270,24 +485,73 @@
 
   <!-- Auth Screen -->
   <div id="auth-screen" class="auth-wrapper">
-    <div class="auth-card">
-      <div style="font-size: 40px; margin-bottom: 12px;">🌐</div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+
+    <div class="auth-card" id="auth-card-box">
+      <div class="brand-icon-wrapper">🌐</div>
       <h1>BB Bulut Görünüm</h1>
-      <p>Masaüstü uygulamasında üretilen Referans Kodu ve PIN ile giriş yapın.</p>
+      <p>Blackboard Sınav Yakalayıcı masaüstü uygulamasında oluşturulan kodlarla canlı oturuma katılın.</p>
       
-      <div id="auth-error" class="error-alert"></div>
-
-      <div class="form-group">
-        <label>Referans Kodu</label>
-        <input id="inp-ref" type="text" class="form-control" placeholder="Örn: REF-8492" autocomplete="off" />
+      <div id="auth-error" class="error-alert">
+        <span>⚠️</span>
+        <span id="auth-error-text"></span>
       </div>
 
       <div class="form-group">
-        <label>PIN Kodu</label>
-        <input id="inp-pin" type="password" maxlength="6" class="form-control" placeholder="Örn: 4829" />
+        <label>
+          <span>Referans Kodu</span>
+          <span style="color: var(--primary); font-size: 11px;">Masaüstü GUI'den Alın</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🏷️</span>
+          <input 
+            id="inp-ref" 
+            type="text" 
+            class="form-control form-control-mono" 
+            placeholder="REF-8492" 
+            autocomplete="off"
+            oninput="this.value = this.value.toUpperCase()"
+          />
+        </div>
       </div>
 
-      <button id="btn-login" class="btn" onclick="doLogin()">Verileri Canlı Göster</button>
+      <div class="form-group">
+        <label>
+          <span>PIN Kodu</span>
+          <span style="color: var(--muted); font-size: 11px;">4 Haneli Güvenlik PIN'i</span>
+        </label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔑</span>
+          <input 
+            id="inp-pin" 
+            type="password" 
+            maxlength="6" 
+            class="form-control form-control-mono" 
+            placeholder="••••" 
+          />
+          <button type="button" class="toggle-password" onclick="togglePinVisibility()">👁️</button>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
+        <button id="btn-login" class="btn" style="width: 100%;" onclick="doLogin()">
+          <span id="btn-text">🚀 Verileri Canlı Göster</span>
+          <span id="btn-spinner" class="spinner" style="display: none;"></span>
+        </button>
+
+        <button type="button" class="btn btn-secondary" style="width: 100%; font-size: 13px;" onclick="loadDemoMode()">
+          ✨ Demo Verileri İle Önizle (Canlı Test)
+        </button>
+      </div>
+
+      <div class="trust-badges">
+        <div class="trust-badge-item">🔒 256-Bit Şifreli</div>
+        <div>•</div>
+        <div class="trust-badge-item">⚡ Anlık Canlı Senkron</div>
+        <div>•</div>
+        <div class="trust-badge-item">🛡️ Salt-Okunur</div>
+      </div>
     </div>
   </div>
 
@@ -296,31 +560,50 @@
     <header>
       <div class="logo-area">
         <span class="logo-badge">VERCEL CLOUD</span>
-        <strong id="header-ref">REF-XXXX</strong>
+        <strong id="header-ref" style="font-family: 'JetBrains Mono', monospace;">REF-XXXX</strong>
       </div>
       <div style="display: flex; align-items: center; gap: 16px;">
-        <span class="live-badge"><span class="live-dot"></span> Canlı Senkronize</span>
-        <button class="btn" style="padding: 6px 14px; font-size: 13px; width: auto;" onclick="logout()">Çıkış</button>
+        <span class="live-badge"><span class="live-dot"></span> Canlı Senkronize • <span id="last-sync-time">17:44:50</span></span>
+        <button class="btn btn-secondary" style="padding: 6px 14px; font-size: 13px;" onclick="logout()">Çıkış</button>
       </div>
     </header>
 
     <div class="container">
-      <div id="summary-area" class="summary-grid"></div>
-      <div id="courses-area"></div>
-    </div>
-  </div>
-
-  <!-- Modal -->
-  <div id="modal" class="modal-backdrop">
-    <div class="modal-box">
-      <div class="modal-head">
-        <h3 id="modal-title">Eksik Öğrenciler</h3>
-        <p id="modal-sub" style="color: var(--muted); font-size: 13px; margin-top: 4px;"></p>
+      <!-- Tabs -->
+      <div class="tabs-bar">
+        <button id="tab-cards-btn" class="tab-btn active" onclick="switchTab('cards')">📊 Sınav Kartları Görünümü</button>
+        <button id="tab-list-btn" class="tab-btn" onclick="switchTab('list')">🚨 Detaylı Eksik Öğrenciler Listesi (<span id="total-missing-badge">0</span>)</button>
       </div>
-      <div id="modal-list" class="modal-body"></div>
-      <div class="modal-foot">
-        <button class="btn" style="width: auto; padding: 8px 16px; font-size: 13px; background: rgba(255,255,255,0.1);" onclick="copyModalList()">Listeyi Kopyala</button>
-        <button class="btn" style="width: auto; padding: 8px 16px; font-size: 13px;" onclick="closeModal()">Kapat</button>
+
+      <div id="summary-area" class="summary-grid"></div>
+
+      <!-- Tab 1: Cards View -->
+      <div id="tab-cards-view">
+        <div id="courses-area"></div>
+      </div>
+
+      <!-- Tab 2: Master Missing Roster View -->
+      <div id="tab-list-view" style="display: none;">
+        <div class="table-container">
+          <div class="search-bar-row">
+            <input id="inp-master-search" type="text" class="form-control" style="padding-left: 16px;" placeholder="🔍 Öğrenci adı, numarası veya sınav adı ile canlı ara..." oninput="renderMasterTable()" />
+            <button class="btn btn-secondary" onclick="copyMasterMissingList()">📋 Listeyi Kopyala</button>
+            <button class="btn btn-secondary" onclick="downloadMasterCSV()">📥 CSV İndir</button>
+          </div>
+
+          <table class="master-table">
+            <thead>
+              <tr>
+                <th style="width: 50px;">#</th>
+                <th>Sınav / Ders Klasörü</th>
+                <th>Öğrenci Adı Soyadı</th>
+                <th>Öğrenci Numarası</th>
+                <th>Durum</th>
+              </tr>
+            </thead>
+            <tbody id="master-table-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -329,13 +612,37 @@
     let activeRef = localStorage.getItem('bb_ref') || '';
     let activePin = localStorage.getItem('bb_pin') || '';
     let refreshTimer = null;
-    let currentModalMissing = [];
-    let currentModalExam = '';
+    let currentData = null;
+    let allMissingStudentsMaster = [];
 
     if (activeRef && activePin) {
       document.getElementById('inp-ref').value = activeRef;
       document.getElementById('inp-pin').value = activePin;
       doLogin();
+    }
+
+    function togglePinVisibility() {
+      const pinInp = document.getElementById('inp-pin');
+      pinInp.type = pinInp.type === 'password' ? 'text' : 'password';
+    }
+
+    function showError(msg) {
+      const errEl = document.getElementById('auth-error');
+      const errTxt = document.getElementById('auth-error-text');
+      const cardBox = document.getElementById('auth-card-box');
+
+      errTxt.innerText = msg;
+      errEl.style.display = 'flex';
+      
+      cardBox.classList.remove('shake');
+      void cardBox.offsetWidth; // trigger reflow
+      cardBox.classList.add('shake');
+    }
+
+    function setLoginLoading(loading) {
+      document.getElementById('btn-text').style.display = loading ? 'none' : 'inline';
+      document.getElementById('btn-spinner').style.display = loading ? 'inline-block' : 'none';
+      document.getElementById('btn-login').disabled = loading;
     }
 
     async function doLogin() {
@@ -345,14 +652,17 @@
       errEl.style.display = 'none';
 
       if (!ref || !pin) {
-        errEl.innerText = 'Lütfen Referans Kodu ve PIN girin.';
-        errEl.style.display = 'block';
+        showError('Lütfen Referans Kodu ve PIN girin.');
         return;
       }
+
+      setLoginLoading(true);
 
       try {
         const resp = await fetch(`/api/view?ref_code=${encodeURIComponent(ref)}&pin=${encodeURIComponent(pin)}`);
         const json = await resp.json();
+        setLoginLoading(false);
+
         if (!resp.ok || !json.success) {
           throw new Error(json.error || 'Giriş başarısız.');
         }
@@ -369,9 +679,68 @@
         renderData(json.data);
         startAutoRefresh();
       } catch (err) {
-        errEl.innerText = err.message;
-        errEl.style.display = 'block';
+        setLoginLoading(false);
+        showError(err.message);
       }
+    }
+
+    function loadDemoMode() {
+      const demoData = {
+        summary: {
+          total_exams: 3,
+          captured_sum: 82,
+          roster_total_sum: 90,
+          exams_with_missing: 2
+        },
+        courses: [
+          {
+            name: "BST020 - Veri Madenciliği",
+            exams: [
+              {
+                name: "Vize Sınavı",
+                item_count: 30,
+                total: 30,
+                captured: 30,
+                missing: []
+              },
+              {
+                name: "Final Sınavı",
+                item_count: 26,
+                total: 30,
+                captured: 26,
+                missing: [
+                  { name: "AYŞE YILMAZ", no: "2420171001" },
+                  { name: "MEHMET KADİR ARICI", no: "2420191035" },
+                  { name: "ZEYNEP KAYA", no: "2420181042" },
+                  { name: "CAN DEMİR", no: "2420201012" }
+                ]
+              }
+            ]
+          },
+          {
+            name: "BST024 - Yapay Zeka Uygulamaları",
+            exams: [
+              {
+                name: "Proje Değerlendirmesi",
+                item_count: 26,
+                total: 30,
+                captured: 26,
+                missing: [
+                  { name: "AHMET ŞAHİN", no: "2420191008" },
+                  { name: "ELİF YILDIZ", no: "2420211055" },
+                  { name: "BURAK ÇELİK", no: "2420191090" },
+                  { name: "SEDA AYDIN", no: "2420221011" }
+                ]
+              }
+            ]
+          }
+        ]
+      };
+
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('dash-screen').style.display = 'block';
+      document.getElementById('header-ref').innerText = "DEMO-LIVE";
+      renderData(demoData);
     }
 
     function logout() {
@@ -380,6 +749,13 @@
       clearInterval(refreshTimer);
       document.getElementById('dash-screen').style.display = 'none';
       document.getElementById('auth-screen').style.display = 'flex';
+    }
+
+    function switchTab(tab) {
+      document.getElementById('tab-cards-btn').classList.toggle('active', tab === 'cards');
+      document.getElementById('tab-list-btn').classList.toggle('active', tab === 'list');
+      document.getElementById('tab-cards-view').style.display = (tab === 'cards') ? 'block' : 'none';
+      document.getElementById('tab-list-view').style.display = (tab === 'list') ? 'block' : 'none';
     }
 
     function startAutoRefresh() {
@@ -398,12 +774,31 @@
 
     function renderData(data) {
       if (!data) return;
+      currentData = data;
 
-      // Summary
+      const syncEl = document.getElementById('last-sync-time');
+      if (syncEl) {
+        syncEl.innerText = new Date().toLocaleTimeString('tr-TR');
+      }
+
+      allMissingStudentsMaster = [];
+      (data.courses || []).forEach(course => {
+        (course.exams || []).forEach(exam => {
+          (exam.missing || []).forEach(s => {
+            allMissingStudentsMaster.push({
+              course: course.name,
+              exam: exam.name,
+              name: s.name,
+              no: s.no
+            });
+          });
+        });
+      });
+
+      document.getElementById('total-missing-badge').innerText = allMissingStudentsMaster.length;
+
       const summary = data.summary;
       const sumArea = document.getElementById('summary-area');
-      sumArea.innerHTML = '';
-
       if (summary) {
         sumArea.innerHTML = `
           <div class="stat-card">
@@ -415,21 +810,20 @@
             <div class="stat-lbl">Toplam Yakalanan PDF</div>
           </div>
           <div class="stat-card">
-            <div class="stat-val" style="color: ${summary.exams_with_missing ? 'var(--warning)' : 'var(--success)'}">
-              ${summary.exams_with_missing}
+            <div class="stat-val" style="color: ${allMissingStudentsMaster.length > 0 ? 'var(--warning)' : 'var(--success)'}">
+              ${allMissingStudentsMaster.length}
             </div>
-            <div class="stat-lbl">Eksik Olan Sınav Sayısı</div>
+            <div class="stat-lbl">Toplam Eksik Öğrenci Sayısı</div>
           </div>
         `;
       }
 
-      // Courses & Exams
       const cArea = document.getElementById('courses-area');
       cArea.innerHTML = '';
 
       (data.courses || []).forEach(course => {
         const cDiv = document.createElement('div');
-        cDiv.innerHTML = `<h2 class="course-title">📁 ${course.name}</h2>`;
+        cDiv.innerHTML = `<h2 class="course-title"><span>📁 ${course.name}</span></h2>`;
         
         const grid = document.createElement('div');
         grid.className = 'card-grid';
@@ -440,22 +834,41 @@
           
           let statusText = `${exam.item_count} öğe`;
           let statusClass = '';
-          let missingChipsHtml = '';
+          let missingHtml = '';
 
           if (exam.total !== null) {
             const isComplete = exam.captured >= exam.total;
-            statusText = isComplete ? 'Tamamlandı' : `${(exam.missing || []).length} öğrenci eksik`;
+            const missingCount = (exam.missing || []).length;
+            statusText = isComplete ? 'Tamamlandı' : `${missingCount} öğrenci eksik`;
             statusClass = isComplete ? 'ok' : 'warn';
 
             if (exam.missing && exam.missing.length > 0) {
-              const shown = exam.missing.slice(0, 4);
-              const remaining = exam.missing.length - shown.length;
-              
-              let chips = shown.map(s => `<span class="chip">⚠ ${s.name}</span>`).join('');
-              if (remaining > 0) {
-                chips += `<span class="chip chip-more" onclick='openModal(${JSON.stringify(exam.name)}, ${JSON.stringify(exam.missing)})'>+${remaining} daha (Tümünü Gör)</span>`;
-              }
-              missingChipsHtml = `<div class="chips-area">${chips}</div>`;
+              const rows = exam.missing.map((s, idx) => `
+                <tr>
+                  <td style="color: var(--muted); font-weight: 600;">${idx + 1}.</td>
+                  <td>⚠ ${s.name}</td>
+                  <td style="text-align: right; color: var(--muted); font-family: monospace;">${s.no}</td>
+                </tr>
+              `).join('');
+
+              missingHtml = `
+                <details class="missing-details" open>
+                  <summary>
+                    <span>⚠ Eksik Öğrenci Listesi (${missingCount} kişi)</span>
+                    <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="event.preventDefault(); copyExamMissing(${JSON.stringify(exam.name)}, ${JSON.stringify(exam.missing)})">Kopyala</button>
+                  </summary>
+                  <table class="missing-table-card">
+                    <thead>
+                      <tr>
+                        <th style="width: 24px;">#</th>
+                        <th>Ad Soyad</th>
+                        <th style="text-align: right;">Öğrenci No</th>
+                      </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                  </table>
+                </details>
+              `;
             }
           }
 
@@ -474,7 +887,7 @@
                 <div class="exam-status ${statusClass}">${statusText}</div>
               </div>
             </div>
-            ${missingChipsHtml}
+            ${missingHtml}
           `;
           grid.appendChild(card);
         });
@@ -482,33 +895,83 @@
         cDiv.appendChild(grid);
         cArea.appendChild(cDiv);
       });
+
+      renderMasterTable();
     }
 
-    function openModal(examName, missing) {
-      currentModalExam = examName;
-      currentModalMissing = missing || [];
-      document.getElementById('modal-title').innerText = `📁 ${examName}`;
-      document.getElementById('modal-sub').innerText = `Bu sınavda toplam ${missing.length} öğrencinin PDF'i eksik.`;
-      
-      const listEl = document.getElementById('modal-list');
-      listEl.innerHTML = missing.map((s, i) => `
-        <div class="missing-item">
-          <span><strong>${i+1}.</strong> ⚠ ${s.name}</span>
-          <span style="color: var(--muted);">${s.no}</span>
-        </div>
-      `).join('');
+    function renderMasterTable() {
+      const tbody = document.getElementById('master-table-body');
+      if (!tbody) return;
+      tbody.innerHTML = '';
 
-      document.getElementById('modal').classList.add('active');
+      const query = (document.getElementById('inp-master-search')?.value || '').trim().toLowerCase();
+
+      const filtered = allMissingStudentsMaster.filter(item => {
+        if (!query) return true;
+        return item.name.toLowerCase().includes(query) ||
+               item.no.toLowerCase().includes(query) ||
+               item.exam.toLowerCase().includes(query) ||
+               item.course.toLowerCase().includes(query);
+      });
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" style="text-align: center; color: var(--muted); padding: 30px;">
+              ${allMissingStudentsMaster.length === 0 ? '🎉 Tebrikler! Tüm sınavlarda eksik öğrenci yok.' : 'Aramanıza uygun eksik öğrenci bulunamadı.'}
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      filtered.forEach((item, idx) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="color: var(--muted); font-weight: 600;">${idx + 1}</td>
+          <td>📁 ${item.course} / <strong>${item.exam}</strong></td>
+          <td><strong>⚠ ${item.name}</strong></td>
+          <td style="font-family: 'JetBrains Mono', monospace; color: var(--muted);">${item.no}</td>
+          <td><span class="badge-warn">PDF Gelmedi</span></td>
+        `;
+        tbody.appendChild(tr);
+      });
     }
 
-    function closeModal() {
-      document.getElementById('modal').classList.remove('active');
-    }
-
-    function copyModalList() {
-      const text = `${currentModalExam} Eksik Listesi:\n` + currentModalMissing.map(s => `${s.name} (${s.no})`).join('\n');
+    function copyExamMissing(examName, missing) {
+      const lines = missing.map(s => `${s.name} (${s.no})`);
+      const text = `${examName} Eksik Öğrenci Listesi (${missing.length} kişi):\n` + lines.join('\n');
       navigator.clipboard.writeText(text);
-      alert('Eksik listesi panoya kopyalandı.');
+      alert(`${examName} sınavının eksik öğrenci listesi panoya kopyalandı.`);
+    }
+
+    function copyMasterMissingList() {
+      if (allMissingStudentsMaster.length === 0) {
+        alert('Eksik öğrenci bulunmuyor.');
+        return;
+      }
+      const lines = allMissingStudentsMaster.map((s, i) => `${i+1}. [${s.course}/${s.exam}] ${s.name} (${s.no})`);
+      const text = `TÜM SINAVLAR EKSİK ÖĞRENCİ LİSTESİ (${allMissingStudentsMaster.length} kişi):\n` + lines.join('\n');
+      navigator.clipboard.writeText(text);
+      alert('Tüm sınavların eksik öğrenci listesi panoya kopyalandı.');
+    }
+
+    function downloadMasterCSV() {
+      if (allMissingStudentsMaster.length === 0) {
+        alert('İndirilecek eksik öğrenci bulunmuyor.');
+        return;
+      }
+      let csv = "\uFEFFDers;Sınav;Ad Soyad;Öğrenci Numarası\n";
+      allMissingStudentsMaster.forEach(s => {
+        csv += `"${s.course}";"${s.exam}";"${s.name}";"${s.no}"\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `eksik_ogrenciler_listesi.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     }
   </script>
 </body>
