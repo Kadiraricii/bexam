@@ -81,25 +81,50 @@ def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
     Not, sidebar'daki skor rozetinden (ör. '50 / 100') alinir - bu,
     daha sonra tiklanan sayfadaki notla karsilastirilarak dogru
     ogrenciye tiklandigini teyit etmek icin kullanilir.
-
-    ONEMLI - sadece "capture anchor" icin kullanilir: bu fonksiyon
-    SAYISAL NOT DESENI iceren satirlarla SINIRLI (bilerek - sayfa genelinde
-    guvenli bir baslangic noktasi bulmak icin). Henuz notlandirilmamis/
-    muaf gibi durumdaki ogrenciler bu filtreden GECMEZ - onlari da
-    yakalamak icin bkz. collect_visible_rows_in_container (panelin kendi
-    DOM alt agaciyla sinirli oldugu icin sayisal not sarti aramadan da
-    guvenle genisletilebiliyor).
     """
-    candidates = page.get_by_role("button").filter(has_text=STUDENT_ROW_SCORE_PATTERN)
+    selectors = [
+        '[role="button"]',
+        'button',
+        '[role="option"]',
+        '[role="listitem"]',
+        '[role="treeitem"]',
+        'li',
+        'a',
+        'div.student-row',
+        'div',
+    ]
+    candidates = page.locator(", ".join(selectors)).filter(has_text=STUDENT_ROW_SCORE_PATTERN)
     rows: list[tuple[str, str]] = []
+    seen_names: set[str] = set()
+
     for i in range(candidates.count()):
-        text = candidates.nth(i).inner_text().strip()
+        candidate = candidates.nth(i)
+        try:
+            text = candidate.inner_text().strip()
+        except Exception:
+            continue
+        if not text:
+            continue
+        scores_found = STUDENT_ROW_SCORE_PATTERN.findall(text)
+        if len(scores_found) > 1:
+            continue
+
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             continue
+
         score_match = STUDENT_ROW_SCORE_PATTERN.search(text)
         score = score_match.group(0).strip() if score_match else ""
-        rows.append((lines[0], score))
+
+        student_name = lines[0]
+        if STUDENT_ROW_SCORE_PATTERN.match(student_name) or len(student_name) < 2:
+            continue
+
+        row_key = f"{student_name}_{score}"
+        if row_key not in seen_names:
+            seen_names.add(row_key)
+            rows.append((student_name, score))
+
     return rows
 
 
@@ -107,40 +132,39 @@ def collect_visible_rows_in_container(scroll_handle) -> list[tuple[str, str]]:
     """scroll_handle (bulunan kaydirma konteyneri) icindeki TUM satir
     butonlarini toplar - collect_visible_rows'un aksine sayisal not
     ZORUNLU DEGIL.
-
-    Neden: collect_visible_rows sadece 'X / Y' gibi sayisal bir not
-    deseni iceren satirlari sayiyordu. Ama bir ogrenci henuz
-    notlandirilmamis, muaf tutulmus ya da baska bir durum metniyle
-    gosteriliyor olabilir (hocanin kendi ekran goruntusundeki
-    '15/20 GÖNDERİLDİ' toplami da bunu dusunduruyor) - bu satirlar sayisal
-    desene UYMADIGI icin collect_visible_rows onlari HIC TOPLAMAZDI, yani
-    o ogrenciler script'e tamamen gorunmezdi, hicbir uyari da verilmezdi.
-
-    Bu fonksiyon konteynerin KENDI DOM ALT AGACIYLA sinirli oldugu icin
-    (sayfa geneli degil), sayisal-not sartini kaldirmak sayfadaki
-    ilgisiz butonlarin (navigasyon, sekme secici vb.) karismasi riskini
-    dogurmuyor - zaten bulunmus ogrenci panelinin icindeyiz.
     """
     raw_texts = scroll_handle.evaluate(
         """el => {
-            const buttons = Array.from(el.querySelectorAll('[role="button"], button'));
+            const buttons = Array.from(el.querySelectorAll('[role="button"], button, [role="option"], [role="listitem"], li, a, div'));
             return buttons.map((b) => (b.innerText || '').trim()).filter(Boolean);
         }"""
     )
     rows: list[tuple[str, str]] = []
     for text in raw_texts:
+        scores_found = STUDENT_ROW_SCORE_PATTERN.findall(text)
+        if len(scores_found) > 1:
+            continue
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             continue
         score_match = STUDENT_ROW_SCORE_PATTERN.search(text)
         score = score_match.group(0).strip() if score_match else ""
-        rows.append((lines[0], score))
+        student_name = lines[0]
+        if len(student_name) < 2:
+            continue
+        rows.append((student_name, score))
     return rows
 
 
 def find_scroll_container(page: Page, anchor_text: str):
     """Verilen ogrenci satirindan yukari dogru en yakin kaydirilabilir atayi bulur."""
-    anchor = page.get_by_role("button", name=re.compile(re.escape(anchor_text))).first
+    anchor = page.get_by_text(anchor_text, exact=True).first
+    if anchor.count() == 0:
+        anchor = page.get_by_role("button", name=re.compile(re.escape(anchor_text))).first
+    if anchor.count() == 0:
+        anchor = page.get_by_text(re.compile(re.escape(anchor_text))).first
+    if anchor.count() == 0:
+        return None
     handle = anchor.evaluate_handle(
         """el => {
             let node = el;
@@ -286,9 +310,24 @@ def capture_student(
     # sekilde farkliysa (0 eslesme) eski substring davranisina duseriz -
     # yanlis-pozitif riskine ragmen hic tiklayamamaktan iyi, cunku asil
     # guvence zaten tiklama SONRASI icerik dogrulamasi (ONAY + isim + not).
-    rows = page.get_by_role("button").filter(has_text=exact_line_pattern(dom_name))
+    selectors = [
+        '[role="button"]',
+        'button',
+        '[role="option"]',
+        '[role="listitem"]',
+        '[role="treeitem"]',
+        'li',
+        'a',
+        'div',
+    ]
+    rows = page.locator(", ".join(selectors)).filter(has_text=exact_line_pattern(dom_name))
     if rows.count() == 0:
         rows = page.get_by_role("button", name=re.compile(re.escape(dom_name)))
+    if rows.count() == 0:
+        rows = page.get_by_text(exact_line_pattern(dom_name))
+    if rows.count() == 0:
+        rows = page.get_by_text(dom_name)
+
     safe_index = min(occurrence_index, max(rows.count() - 1, 0))
     rows.nth(safe_index).click()
 

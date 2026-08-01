@@ -87,10 +87,8 @@ GRADING_STATUS_COMPLETE_PATTERN = re.compile(
 # ayrica tirnak eklemeden dogrudan f-string'e gömebilsin diye.
 GRADING_STATUS_COMPLETE_MARKERS_LABEL = " / ".join(f"'{m}'" for m in GRADING_STATUS_COMPLETE_MARKERS)
 NOTHING_TO_GRADE_MARKER = "Not verilecek bir şey yok"
-# Not Defteri'nin "Not Verilebilir Öğeler" sekmesine ozel, Gönderimler/
-# Degerlendirme alt sayfalarinda GORUNMEYEN bir metin - "geri donduk mu"
-# kontrolu icin (bkz. return_to_grades_list).
-GRADES_LIST_READY_SELECTOR = "text=Not Verilebilir Öğeler"
+# Not Defteri'nin yuklendigini teyit etmek icin flexible selector listesi
+GRADES_LIST_READY_SELECTOR = "text=Not Verilebilir Öğeler, text=Not Defteri, text=Öğrenci Durumu, tr, [role='row']"
 SUBMITTED_COUNT_PATTERN = re.compile(r"(\d+)\s*/\s*\d+\s*g[öo]nderildi", re.IGNORECASE)
 # Blackboard'un yerlesik "Yoklama" ogeleri "Test" degil "Günlük" (Daily)
 # kategorisinde olur ve herkes yoklamaya alindiginda durumu da
@@ -343,7 +341,13 @@ def return_to_grades_list(page: Page, grades_url: str, *, try_back: bool = True)
             pass
 
     page.goto(grades_url)
-    page.wait_for_selector(GRADES_LIST_READY_SELECTOR, timeout=15_000)
+    try:
+        page.wait_for_selector(GRADES_LIST_READY_SELECTOR, timeout=15_000)
+    except PlaywrightTimeoutError:
+        page.wait_for_timeout(2_000)
+        if page.locator(ROW_SELECTOR).count() > 0:
+            return
+        raise
 
 
 def _filter_submissions_to_submitted(page: Page) -> None:
