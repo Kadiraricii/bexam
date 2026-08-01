@@ -15,8 +15,26 @@ LOG_PATH = ROOT_DIR / ".state" / "captures.json"
 OUTPUT_DIR = ROOT_DIR / "output"
 ONBOARDING_SEEN_PATH = ROOT_DIR / ".state" / "onboarding_seen"
 
-ONAY_PATTERN = re.compile(r"ONAY:\s*([A-F0-9]+)")
-SUBMIT_DATE_PATTERN = re.compile(r"G[ÖO]NDER[İI]M TAR[İI]H[İI]:\s*([\d.]+\s+[\d:]+)")
+# CANLI DOGRULANAN HATA: Blackboard'un "Cevrimici Test" (Quiz, ör.
+# "Çoktan Seçmeli"/otomatik notlandirilan sinavlar) DEGERLENDIRME
+# sayfasinda bu etiketler TUM BUYUK HARF ("ONAY:", "GÖNDERİM TARİHİ:")
+# DEGIL, sadece ilk harfi buyuk cumle-ici bicimde ("Onay: <hex kod>",
+# "Gönderim tarihi: <tarih>") gorunuyor - kullanicinin paylastigi CANLI
+# sayfa HTML'inde (bkz. proje gecmisi) dogrulandi. re.IGNORECASE
+# EKLENMEDEN önce bu iki regex bu sinav turunde HICBIR ZAMAN eslesmiyordu
+# - capture_student'in "ONAY: XXXX" bekleyen dogrulama dongusu sonsuza
+# kadar basarisiz olup HER TEK ogrenci icin (bu sinav turunde TEK BIR
+# PDF bile uretilmeden) "dogru icerik dogrulanamadi" hatasi veriyordu.
+# Ayrica onay kodunun kendisi de kucuk harfli hex karakterler icerebiliyor
+# (ör. "0cfc5e7e0096478ea1f95ad221e94f7c") - [A-F0-9] karakter sinifi
+# IGNORECASE ile birlikte kucuk harf a-f'yi de otomatik kapsar, bu yuzden
+# ayrica [a-fA-F0-9] gibi genisletmeye gerek yok. Bu, GRADING_STATUS_
+# COMPLETE_PATTERN'daki ('Tümüne Not Verildi' / 'Tümüne not verildi')
+# AYNI kategori Blackboard harf-kasasi tutarsizligi (bkz. scan_course.py).
+ONAY_PATTERN = re.compile(r"ONAY:\s*([A-F0-9]+)", re.IGNORECASE)
+SUBMIT_DATE_PATTERN = re.compile(
+    r"G[ÖO]NDER[İI]M TAR[İI]H[İI]:\s*([\d.]+\s+[\d:]+)", re.IGNORECASE
+)
 SCORE_PATTERN = re.compile(r"\d+(?:[.,]\d+)?\s*/\s*\d+(?:[.,]\d+)?")
 SCORE_SEARCH_WINDOW_CHARS = 150
 

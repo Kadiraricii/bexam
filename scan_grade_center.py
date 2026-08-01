@@ -61,8 +61,20 @@ from common import (
 )
 
 STUDENT_ROW_SCORE_PATTERN = re.compile(r"\d+([.,]\d+)?\s*/\s*\d+([.,]\d+)?")
-ONAY_PATTERN = re.compile(r"ONAY:\s*([A-F0-9]+)")
-SUBMIT_DATE_MARKER = "GÖNDERİM TARİHİ"
+# CANLI DOGRULANAN HATA: bkz. common.ONAY_PATTERN'daki ayni notun tam
+# metni - Blackboard'un "Çevrimiçi Test/Quiz" degerlendirme sayfasinda bu
+# etiketler TUM BUYUK HARF DEGIL, cumle-ici bicimde ("Onay: <hex kod>",
+# "Gönderim tarihi: <tarih>") gorunuyor. re.IGNORECASE eklenmeden once bu
+# sinav turunde ONAY_PATTERN hicbir zaman eslesmiyor, capture_student'in
+# dogrulama dongusu HER ogrenci icin sonsuza kadar basarisiz oluyordu -
+# yani bu sinav turunde TEK BIR PDF bile uretilemiyordu.
+ONAY_PATTERN = re.compile(r"ONAY:\s*([A-F0-9]+)", re.IGNORECASE)
+# SUBMIT_DATE_MARKER_PATTERN (asagida) ayni sebeple regex+IGNORECASE
+# olarak tutuluyor - duz `str.find()` kullanan eski SUBMIT_DATE_MARKER
+# sabiti de ayni harf-kasasi sorununu tasiyordu (header_matches_student
+# icindeki .find() TUM BUYUK HARFE gore ariyordu, kucuk/cumle-ici
+# bicimde hicbir zaman bulunamiyordu).
+SUBMIT_DATE_MARKER_PATTERN = re.compile(r"G[ÖO]NDER[İI]M TAR[İI]H[İI]", re.IGNORECASE)
 HEADER_WINDOW_CHARS = 400
 
 MAX_WAIT_ATTEMPTS = 20
@@ -289,9 +301,10 @@ def header_matches_student(body_text: str, student_name: str) -> bool:
     sayilip YANLIS icerik YANLIS isimle PDF'lenebilirdi. Adin iki yaninda
     baska bir harf/rakam OLMAMASINI sart kosuyoruz (Turkce harfler de \\w
     kapsaminda oldugu icin 'KAYAALP' icindeki 'KAYA' artik eslesmez)."""
-    idx = body_text.find(SUBMIT_DATE_MARKER)
-    if idx == -1:
+    marker_match = SUBMIT_DATE_MARKER_PATTERN.search(body_text)
+    if marker_match is None:
         return False
+    idx = marker_match.start()
     window = body_text[max(0, idx - HEADER_WINDOW_CHARS):idx]
     return re.search(rf"(?<!\w){re.escape(student_name)}(?!\w)", window) is not None
 
@@ -377,11 +390,35 @@ def capture_student(
         page.wait_for_timeout(WAIT_STEP_MS)
 
     if not matched:
+        # Hangi TEK KOSULUN basarisiz oldugunu (ONAY bulunamadi mi, isim
+        # baslikta gecmiyor mu, yoksa puan mi tutmuyor) ACIKCA soyluyoruz -
+        # eskiden uc kosulu da tek bir genel cumlede birlestiren mesaj,
+        # bir sonraki hatanin GERCEK sebebini (ör. sayfa yapisi degisti mi,
+        # yavas mi yuklendi, gercekten gonderilmemis mi) anlamak icin
+        # kullaniciyi tekrar tekrar log/ekran goruntusu paylasmaya
+        # zorluyordu - artik son denemede GERCEKTEN NE bulundugu (varsa)
+        # mesaja dahil ediliyor.
+        onay_found = ONAY_PATTERN.search(body_text)
+        name_found = header_matches_student(body_text, dom_name)
+        reasons = []
+        if not onay_found:
+            reasons.append("sayfada 'ONAY:'/'Onay:' metni hiç bulunamadı")
+        if onay_found and not name_found:
+            reasons.append(
+                f"ONAY bulundu ama 'GÖNDERİM TARİHİ'/'Gönderim tarihi' bloğunun "
+                f"hemen üstünde '{dom_name}' adı geçmiyor"
+            )
+        if onay_found and name_found and not score_ok:
+            reasons.append(
+                f"sayfadaki not ({info['puan']!r}) sidebar'daki notla "
+                f"({sidebar_score!r}) uyuşmuyor"
+            )
+        if not reasons:
+            reasons.append("nedeni belirlenemedi (kosullar son denemede aninda degisti olabilir)")
         raise RuntimeError(
-            f"'{display_name}' icin dogru icerik dogrulanamadi (ONAY yok, "
-            "basliktaki isim eslesmiyor, ya da sayfadaki not sidebar'daki "
-            f"notla ({sidebar_score!r}) uyusmuyor) - gondermemis olabilir, "
-            "sayfa gecisi yavas kalmis olabilir ya da oturum dusmus olabilir"
+            f"'{display_name}' icin dogru icerik dogrulanamadi: {'; '.join(reasons)} "
+            "- gondermemis olabilir, sayfa gecisi yavas kalmis olabilir ya da "
+            "oturum dusmus olabilir"
         )
 
     student_no = (roster or {}).get(normalize_roster_name(dom_name))
@@ -450,11 +487,7 @@ def main() -> None:
             print("Ogrenci listesi taraniyor (kaydirarak toplaniyor)...")
             student_rows = find_student_rows(page)
             print(f"\nSinav: {exam_label}")
-            print(f"{len(student_rows)} ogrenci satiri bulundu:")
-            for idx, (s_name, s_score) in enumerate(student_rows, 1):
-                score_disp = f" ({s_score})" if s_score else ""
-                print(f"  • {idx}. {s_name}{score_disp}")
-            print()
+            print(f"{len(student_rows)} ogrenci satiri bulundu.\n")
 
             if not student_rows:
                 print(

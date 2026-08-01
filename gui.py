@@ -2682,6 +2682,23 @@ class BlackboardGUI:
                         "edebilirsin - sorun sürerse 'Tarayıcıyı Aç'a tekrar "
                         "basmayı dene.",
                     ))
+                    # CANLI DOGRULANAN HATA: bu genel guvenlik agi devreye
+                    # girdiginde ilgili "*_done" sinyali (ör. "student_scan_done")
+                    # gonderilmezse, o komutun basinda devre disi birakilan
+                    # dugme (ör. "Öğrenci Tara") bir daha HIC yeniden aktif
+                    # olmuyordu - kullaniciya program TAMAMEN tepkisiz kalmis
+                    # gibi gorunuyordu (output/log.txt'de tek bir baslangic
+                    # satirinin ardindan saatlerce hicbir devam mesaji
+                    # gelmemesiyle dogrulandi). Hangi komut islenirken
+                    # patladiysa, o komutun normalde gonderdigi ayni "bitti"
+                    # sinyalini burada da gonderip ilgili dugmeleri geri
+                    # aciyoruz.
+                    if command == "scan_students":
+                        self.gui_queue.put(("student_scan_done", None))
+                    elif command == "discover":
+                        self.gui_queue.put(("discovery_failed", None))
+                    elif command == "download":
+                        self.gui_queue.put(("scan_done", {"ok": 0, "skip": 0, "fail": 0}))
 
             if context is not None:
                 try:
@@ -3104,7 +3121,34 @@ class BlackboardGUI:
         try:
             while True:
                 kind, payload = self.gui_queue.get_nowait()
-                self._handle_message(kind, payload)
+                # CANLI DOGRULANAN HATA: _handle_message icinde beklenmedik
+                # bir istisna (ör. sayfa gecisi sirasinda artik var olmayan
+                # bir widget'a erisim) firlarsa, eskiden bu istisna
+                # asagidaki self.root.after(...) satirina kadar ULASMADAN
+                # yukari firliyordu - Tkinter hatayi (report_callback_exception
+                # araciligiyla) konsola yazip yutuyor ama bu fonksiyonu BIR
+                # DAHA HIC yeniden zamanlamiyor. Sonuc: worker thread mesaj
+                # uretmeye devam etse bile (ör. tarama surerken), GUI'nin
+                # kuyruk okuma dongusu SESSIZCE VE KALICI OLARAK duruyordu -
+                # ne log paneli/log.txt guncelleniyordu ne de dugmeler
+                # (ör. "Öğrenci Tara") tekrar aktif oluyordu; kullaniciya
+                # "hicbir sey olmuyor" gibi gorunuyordu (bkz. output/log.txt'de
+                # ayni "Öğrenci listesi taranıyor..." satirinin, arkasindan
+                # HICBIR devam mesaji gelmeden, saatler boyunca tekrar tekrar
+                # tek basina gorunmesi). Tek bir kotu mesaj YUZUNDEN butun
+                # GUI'nin sonsuza dek "donmus" kalmasini onlemek icin
+                # her mesaji ayri ayri koruyoruz - biri patlarsa sadece o
+                # mesaj atlanir, kuyruk okumaya (ve zamanlamaya) devam eder.
+                try:
+                    self._handle_message(kind, payload)
+                except Exception as exc:
+                    try:
+                        self._log(f"UYARI: bir arayüz güncellemesi başarısız oldu ({kind}): {exc}")
+                    except Exception:
+                        # self._log'un kendisi de patlarsa (ör. log.txt'ye
+                        # yazma izni sorunu) bu, kuyruk okuma dongusunu
+                        # SONSUZA DEK durdurmaya deger bir sebep degil.
+                        pass
         except queue.Empty:
             pass
         self.root.after(150, self._poll_gui_queue)
