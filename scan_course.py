@@ -93,6 +93,16 @@ NOTHING_TO_GRADE_MARKER = "Not verilecek bir şey yok"
 # kontrolu icin (bkz. return_to_grades_list).
 GRADES_LIST_READY_SELECTOR = "text=Not Verilebilir Öğeler"
 SUBMITTED_COUNT_PATTERN = re.compile(r"(\d+)\s*/\s*\d+\s*g[öo]nderildi", re.IGNORECASE)
+# Blackboard'un yerlesik "Yoklama" ogeleri "Test" degil "Günlük" (Daily)
+# kategorisinde olur ve herkes yoklamaya alindiginda durumu da
+# 'Tamamlandı' gorunur - ama bu bir sinav/quiz DEGIL, tiklaninca
+# Gönderimler/ONAY akisina degil tamamen farkli bir yoklama arayuzune
+# gider; oradan Not Defteri'ne "geri donme" kurtarmasi da calismiyor
+# (CANLI gozlem: return_to_grades_list "Kurtarma başarısız" ile patlayip
+# TUM taramayi durduruyordu). Bu yuzden bu kategorideki satirlar durumu
+# ne olursa olsun BASTAN eleniyor - isme degil KATEGORIYE bakiyoruz
+# (ogretmen yoklama ogesini istedigi gibi adlandirabilir).
+ATTENDANCE_CATEGORY_MARKER = "Günlük"
 # Blackboard Ultra tablolari bazen gercek <tr> yerine <div role="row">
 # olarak render edilebilir - satir ararken HER ZAMAN ikisini de kapsiyoruz,
 # aksi halde bir tarafta calisip diger tarafta hicbir satir bulunamayabilir.
@@ -173,6 +183,7 @@ def find_exam_row_names(page: Page) -> tuple[list[ExamRow], list[str]]:
     edildiginden bagimsiz calisir."""
     status_rows = page.locator(ROW_SELECTOR, has_text=GRADING_STATUS_COMPLETE_PATTERN)
     included: list[ExamRow] = []
+    excluded: list[str] = []
     seen_names: set[str] = set()
     for i in range(status_rows.count()):
         row_text = status_rows.nth(i).inner_text()
@@ -182,6 +193,13 @@ def find_exam_row_names(page: Page) -> tuple[list[ExamRow], list[str]]:
         if not first_line or first_line in seen_names:
             continue
         seen_names.add(first_line)
+        # bkz. ATTENDANCE_CATEGORY_MARKER tanimindaki not - yoklama ogeleri
+        # durumu 'Tamamlandı' olsa bile denenmeden BASTAN eleniyor.
+        if any(line.strip() == ATTENDANCE_CATEGORY_MARKER for line in row_text.splitlines()):
+            excluded.append(
+                f"{first_line} (kategorisi '{ATTENDANCE_CATEGORY_MARKER}' - yoklama, sınav değil, atlandı)"
+            )
+            continue
         count_match = SUBMITTED_COUNT_PATTERN.search(row_text)
         expected_submitted = int(count_match.group(1)) if count_match else None
         included.append(ExamRow(first_line, expected_submitted))
@@ -190,7 +208,6 @@ def find_exam_row_names(page: Page) -> tuple[list[ExamRow], list[str]]:
     # metin) - bu yuzden satirlari buton/link araciligiyla degil, dogrudan
     # satir icerigine gore buluyoruz (bkz. ROW_SELECTOR).
     excluded_rows = page.locator(ROW_SELECTOR, has_text=NOTHING_TO_GRADE_MARKER)
-    excluded: list[str] = []
     for i in range(excluded_rows.count()):
         row_text = excluded_rows.nth(i).inner_text()
         first_line = _first_line(row_text)
