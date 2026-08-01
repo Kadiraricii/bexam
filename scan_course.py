@@ -142,6 +142,37 @@ def _find_row_by_exact_name(page: Page, row_name: str) -> Locator | None:
     return None
 
 
+def _shortest_matching_row(page: Page, pattern: re.Pattern) -> Locator | None:
+    """`pattern`'i iceren ROW_SELECTOR adaylari arasinda - NOTHING_TO_GRADE_
+    MARKER ('Not verilecek bir şey yok') ICEREN adaylar ELENEREK - en KISA
+    inner_text()'e sahip olani doner (yoksa None).
+
+    NEDEN once ELEME sonra en KISA: ROW_SELECTOR ("tr, [role='row']") hem
+    TEK bir satiri hem de o satirlari SARAN bir ust kapsayiciyi
+    eslestirebiliyor - sarici da icinde bir yerde `pattern` GECTIGI icin
+    has_text'i geciyor ve DOM sirasinda cocuklarindan ONCE geldigi icin
+    dogrudan `.first` YANLIS olarak sariciyi secebiliyordu (bkz.
+    _enter_flexible_grading_view'daki CANLI hata notu). Byle bir sarici,
+    hic gonderilmemis ('Not verilecek bir şey yok') bir ogrenciyi de
+    icine alabilir - bu ogrencinin satiri LISTENIN NERESINDE olursa
+    olsun (ILK satir olma zorunlulugu YOK, ortada/sonda da olabilir),
+    onu iceren HERHANGI bir adayi BASTAN eliyoruz; sadece bu elemeden
+    SONRA kalanlar arasinda en kisa olani (= gercek yaprak satir, sarici
+    degil) seciyoruz."""
+    candidates = page.locator(ROW_SELECTOR, has_text=pattern)
+    best: Locator | None = None
+    best_len: int | None = None
+    for i in range(candidates.count()):
+        candidate = candidates.nth(i)
+        text = candidate.inner_text().strip()
+        if not text or NOTHING_TO_GRADE_MARKER in text:
+            continue
+        if best_len is None or len(text) < best_len:
+            best = candidate
+            best_len = len(text)
+    return best
+
+
 class ExamRow(NamedTuple):
     """Not Defteri'ndeki 'Tamamlandı' durumundaki tek bir sinav satiri.
 
@@ -317,18 +348,33 @@ def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
     NOT: ikinci tiklamanin yonu (Gönderimler tablosundaki bir ogrenci
     satirina tiklamak) CANLI Blackboard oturumunda dogrulandi - tiklanan
     sayfa gercekten ONAY koduyla acilan Degerlendirme sayfasi. Ilk
-    denemede yine de "ONAY kodu gorunmedi" hatasi alinmisti; sebep secici
-    degil SURE'ydi - bu sayfa butun sinav sorularini/siklarini yukledigi
-    icin basit bir Not Defteri satirindan cok daha AGIR aciliyor, 10
-    saniyelik bekleme yetersiz kalabiliyor - bu yuzden asagida daha
-    comert bir sure taniniyor."""
+    denemede yine de "ONAY kodu gorunmedi" hatasi alinmisti - CANLI
+    GOZLEM: Gönderimler tablosunun EN USTUNDE genelde hic gonderilmemis
+    ('Not verilecek bir şey yok') bir ogrenci satiri oluyor. ROW_SELECTOR
+    ("tr, [role='row']") hem TEK bir ogrenci satirini hem de o satirlari
+    SARAN bir ust kapsayiciyi (Blackboard bazen tablo govdesine de
+    role='row' verebiliyor) eslestirebiliyor - boyle bir sarici icinde
+    bir yerde 'Tamamlandı' GECTIGI icin has_text'i GECIYOR ve DOM
+    sirasinda cocuklarindan ONCE geldigi icin eski kod (`.first`) bu
+    SARICIYI seciyordu; `.locator('button, a').first` de sarici
+    icindeki EN ILK tiklanabilir ogeyi (- ilk satir hic gonderilmemis
+    ogrenciyse ONUN elemanini -) buluyor, YANLIS yere tikliyordu.
+    Asagida bunun yerine adaylari Python tarafinda toplayip en KISA
+    inner_text()'e sahip olani (= gercek TEK satir, sarici degil)
+    seciyoruz - find_exam_row_names/​_find_row_by_exact_name'deki AYNI
+    "browser tarafi normalizasyonuna guvenme" yaklasimi."""
     try:
         page.wait_for_selector("text=ONAY:", timeout=4_000)
         return
     except PlaywrightTimeoutError:
         pass
 
-    submission_row = page.locator(ROW_SELECTOR, has_text=GRADING_STATUS_COMPLETE_PATTERN).first
+    submission_row = _shortest_matching_row(page, GRADING_STATUS_COMPLETE_PATTERN)
+    if submission_row is None:
+        raise NotSubmittedOrNotExam(
+            f"'{row_name}' icin Gönderimler listesinde 'Tamamlandı'/"
+            "'Tümüne Not Verildi' durumunda bir ogrenci satiri bulunamadi."
+        )
     try:
         clickable = submission_row.locator("button, a").first
         # Satirin kendisi bir buton/link ICERMEYIP dogrudan tiklanabilir
