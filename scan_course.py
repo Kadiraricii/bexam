@@ -142,35 +142,38 @@ def _find_row_by_exact_name(page: Page, row_name: str) -> Locator | None:
     return None
 
 
-def _shortest_matching_row(page: Page, pattern: re.Pattern) -> Locator | None:
-    """`pattern`'i iceren ROW_SELECTOR adaylari arasinda - NOTHING_TO_GRADE_
-    MARKER ('Not verilecek bir şey yok') ICEREN adaylar ELENEREK - en KISA
-    inner_text()'e sahip olani doner (yoksa None).
+def _first_complete_status_row(page: Page) -> Locator | None:
+    """Gönderimler tablosunda "Not Verme Durumu" TAM OLARAK 'Tamamlandı'
+    ya da 'Tümüne Not Verildi' olan ILK ogrenci satirini bulur (yoksa
+    None); hangi ogrenci oldugu onemli degil - bkz.
+    _enter_flexible_grading_view docstring (sonra sol panelden zaten
+    HEPSI tek tek gezilecek).
 
-    NEDEN once ELEME sonra en KISA: ROW_SELECTOR ("tr, [role='row']") hem
-    TEK bir satiri hem de o satirlari SARAN bir ust kapsayiciyi
-    eslestirebiliyor - sarici da icinde bir yerde `pattern` GECTIGI icin
-    has_text'i geciyor ve DOM sirasinda cocuklarindan ONCE geldigi icin
-    dogrudan `.first` YANLIS olarak sariciyi secebiliyordu (bkz.
-    _enter_flexible_grading_view'daki CANLI hata notu). Byle bir sarici,
-    hic gonderilmemis ('Not verilecek bir şey yok') bir ogrenciyi de
-    icine alabilir - bu ogrencinin satiri LISTENIN NERESINDE olursa
-    olsun (ILK satir olma zorunlulugu YOK, ortada/sonda da olabilir),
-    onu iceren HERHANGI bir adayi BASTAN eliyoruz; sadece bu elemeden
-    SONRA kalanlar arasinda en kisa olani (= gercek yaprak satir, sarici
-    degil) seciyoruz."""
-    candidates = page.locator(ROW_SELECTOR, has_text=pattern)
-    best: Locator | None = None
-    best_len: int | None = None
-    for i in range(candidates.count()):
-        candidate = candidates.nth(i)
-        text = candidate.inner_text().strip()
-        if not text or NOTHING_TO_GRADE_MARKER in text:
+    NEDEN "satirin HERHANGI bir yerinde marker geciyor mu" (has_text)
+    DEGIL DE "satirin KAC AYRI SATIRINDA marker TAM OLARAK geciyor"
+    sayiliyor: ROW_SELECTOR ("tr, [role='row']") hem TEK bir ogrenci
+    satirini hem de o satirlari SARAN bir ust kapsayiciyi eslestirebiliyor.
+    Gercek TEK bir satirda durum etiketi (ör. 'Tamamlandı') SADECE BIR
+    KEZ, kendi satirinda gecer; bu satirlari SARAN bir kapsayicida ise
+    ICINDEKI HER notlandirilmis ogrenci icin bu etiket AYRI AYRI (ör. 15
+    kez) tekrarlanir. Bu yuzden marker'in TAM OLARAK 1 kez gectigi ilk
+    adayi 'gercek yaprak satir' olarak kabul ediyoruz - CANLI hata: eski
+    kod (`page.locator(ROW_SELECTOR, has_text=...).first`) boyle bir
+    sariciyi secip icindeki ILK ogrenciye (hic gonderilmemis olsa bile)
+    tikliyordu.
+
+    'Not verilecek bir şey yok' iceren satirlar ayrica BASTAN eleniyor -
+    LISTENIN NERESINDE olursa olsun (ilk satir olma zorunlulugu yok)."""
+    rows = page.locator(ROW_SELECTOR)
+    for i in range(rows.count()):
+        candidate = rows.nth(i)
+        lines = [line.strip() for line in candidate.inner_text().splitlines() if line.strip()]
+        if any(NOTHING_TO_GRADE_MARKER in line for line in lines):
             continue
-        if best_len is None or len(text) < best_len:
-            best = candidate
-            best_len = len(text)
-    return best
+        complete_line_count = sum(1 for line in lines if GRADING_STATUS_COMPLETE_PATTERN.search(line))
+        if complete_line_count == 1:
+            return candidate
+    return None
 
 
 class ExamRow(NamedTuple):
@@ -359,17 +362,17 @@ def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
     SARICIYI seciyordu; `.locator('button, a').first` de sarici
     icindeki EN ILK tiklanabilir ogeyi (- ilk satir hic gonderilmemis
     ogrenciyse ONUN elemanini -) buluyor, YANLIS yere tikliyordu.
-    Asagida bunun yerine adaylari Python tarafinda toplayip en KISA
-    inner_text()'e sahip olani (= gercek TEK satir, sarici degil)
-    seciyoruz - find_exam_row_names/​_find_row_by_exact_name'deki AYNI
-    "browser tarafi normalizasyonuna guvenme" yaklasimi."""
+    Asagida bunun yerine adaylari Python tarafinda toplayip GERCEK bir
+    ogrenci satiri oldugunu (durum etiketi TAM OLARAK BIR KEZ geciyor mu
+    diye sayarak) dogrulayan _first_complete_status_row kullaniliyor -
+    bkz. o fonksiyonun docstring'i."""
     try:
         page.wait_for_selector("text=ONAY:", timeout=4_000)
         return
     except PlaywrightTimeoutError:
         pass
 
-    submission_row = _shortest_matching_row(page, GRADING_STATUS_COMPLETE_PATTERN)
+    submission_row = _first_complete_status_row(page)
     if submission_row is None:
         raise NotSubmittedOrNotExam(
             f"'{row_name}' icin Gönderimler listesinde 'Tamamlandı'/"

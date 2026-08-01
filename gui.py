@@ -930,13 +930,33 @@ class BlackboardGUI:
     def _log(self, message: str) -> None:
         """Mesaji kalici gecmise ekler ve (Ana Sayfa'daysak) log widget'ina
         yazar. Ana Sayfa'da DEGILKEN cagirmak guvenli - mesaj kaybolmaz,
-        sayfa yeniden kuruldugunda gecmisten geri yazilir."""
+        sayfa yeniden kuruldugunda gecmisten geri yazilir.
+
+        Ayrica HER mesaj (GUI'de goruntulenen LOG_HISTORY_MAX_LINES siniri
+        olmadan, TAMAMI) diske de yazilir - bkz. _append_to_log_file."""
         self._log_history.append(message)
         if len(self._log_history) > LOG_HISTORY_MAX_LINES:
             self._log_history = self._log_history[-LOG_HISTORY_MAX_LINES:]
+        self._append_to_log_file(message)
         if not self._on_home_page():
             return
         self._append_log_line(message)
+
+    def _append_to_log_file(self, message: str) -> None:
+        """Her log satirini cikti klasorundeki log.txt'e EKLER (asla
+        uzerine yazmaz) - kullanici bir sorunla karsilastiginda GUI
+        panelinden elle kopyalamak/yazmak yerine dogrudan bu dosyayi
+        paylasabilsin diye (bkz. kullanici istegi: hatalarin tam metnini
+        tekrar tekrar elle yazdirmak yerine tek bir dosyadan okunabilsin).
+        Yazma basarisiz olursa (ör. disk/izin sorunu) sessizce gecilir -
+        loglama arizasi UYGULAMANIN kendisini durdurmamali."""
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with (self.output_dir / "log.txt").open("a", encoding="utf-8") as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except OSError:
+            pass
 
     def _append_log_line(self, message: str) -> None:
         tag = None
