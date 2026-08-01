@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
+from playwright.sync_api import BrowserContext
+
 BASE_URL = "https://istinye.blackboard.com"
 
 ROOT_DIR = Path(__file__).parent
@@ -923,14 +925,51 @@ def is_profile_lock_error(exc_or_message: BaseException | str) -> bool:
 CHROME_MISSING_ERROR_MARKERS = (
     "distribution 'chrome' is not found",
     "playwright install chrome",
+    "executable doesn't exist",
+    "executable does not exist",
+    "cannot find chrome",
+    "no chrome binary",
+    "chrome is not found",
+    "could not find chrome",
+    "failed to launch chrome",
 )
 
 
 def is_chrome_missing_error(exc_or_message: BaseException | str) -> bool:
     """Tarayici-acma hatasinin, makinede Google Chrome kurulu olmamasindan
-    kaynaklanip kaynaklanmadigini tahmin eder."""
+    kaynaklanip kaynaklanmadigini tahmin eder. Kasitli olarak SADECE
+    'chrome' kanalina ozel - launch_browser_context bunu, Edge'e DUSUP
+    dusmeyecegine karar vermek icin kullanir (bkz. o fonksiyonun
+    docstring'i)."""
     message = str(exc_or_message).lower()
     return any(marker in message for marker in CHROME_MISSING_ERROR_MARKERS)
+
+
+# is_chrome_missing_error'dan FARKLI olarak, KANGI kanal (chrome/msedge)
+# olursa olsun "bu tarayici makinede kurulu degil" hatasini genel olarak
+# taniyan kalip - Playwright ayni "Chromium distribution 'X' is not
+# found ... Run \"playwright install X\"" bicimini HER kanal icin
+# kullaniyor, sadece X degisiyor. launch_browser_context Chrome'u
+# deneyip basarisiz olursa Edge'e duser (bkz. asagisi); EDGE DE
+# bulunamazsa kullaniciya "ikisi de kurulu degil" gibi net bir mesaj
+# gosterebilmek icin bu genel kontrol gui.py'de kullanilir.
+BROWSER_MISSING_ERROR_MARKERS = (
+    "is not found at",
+    'run "playwright install',
+    "executable doesn't exist",
+    "executable does not exist",
+    "cannot find",
+    "no browser binary",
+    "failed to launch",
+)
+
+
+def is_browser_missing_error(exc_or_message: BaseException | str) -> bool:
+    """Tarayici-acma hatasinin, denenen KANALIN (chrome ya da msedge)
+    makinede kurulu olmamasindan kaynaklanip kaynaklanmadigini tahmin
+    eder - is_chrome_missing_error'un aksine kanaldan bagimsizdir."""
+    message = str(exc_or_message).lower()
+    return any(marker in message for marker in BROWSER_MISSING_ERROR_MARKERS)
 
 
 def check_output_writable(output_dir: Path) -> str | None:
@@ -963,9 +1002,17 @@ DEFAULT_WINDOW_WIDTH = 1440
 DEFAULT_WINDOW_HEIGHT = 900
 
 
-def browser_launch_kwargs() -> dict:
+def browser_launch_kwargs(channel: str = "chrome") -> dict:
     """Tarayici penceresini makul, sabit bir boyutta acmak icin ortak
     launch ayarlari.
+
+    channel: "chrome" (varsayilan) ya da "msedge" - bkz.
+    launch_browser_context docstring'i: makinede Google Chrome kurulu
+    degilse otomatik olarak Microsoft Edge'e dusuluyor. Edge de Chromium
+    tabanli GERCEK bir tarayici oldugu icin asagidaki otomasyon-tespiti
+    onlemleri (channel + --disable-blink-features + ignore_default_args)
+    Chrome ile AYNI sekilde gecerli kaliyor - ikisi de ayni alt yapiyi
+    (Chromium) paylasiyor, sadece marka/kanal farkli.
 
     Once ekran cozunurlugune gore tam ekran acmayi denedik, ama Blackboard'un
     kendi sayfasi sabit/dar bir genislikte kaliyor - pencereyi ekrana gore
@@ -1009,7 +1056,7 @@ def browser_launch_kwargs() -> dict:
     kontrol ediliyor" cubugunu gizliyor, sandbox'la ilgisi yok.
     """
     return {
-        "channel": "chrome",
+        "channel": channel,
         "viewport": {"width": DEFAULT_WINDOW_WIDTH, "height": DEFAULT_WINDOW_HEIGHT},
         "chromium_sandbox": True,
         "args": [
@@ -1020,6 +1067,57 @@ def browser_launch_kwargs() -> dict:
         ],
         "ignore_default_args": ["--enable-automation"],
     }
+
+
+def launch_browser_context(p, profile_dir: Path) -> BrowserContext:
+    """Kalici profille bir tarayici baglami acar - once Google Chrome'u
+    dener, makinede kurulu degilse otomatik olarak Microsoft Edge'e
+    (channel="msedge") duser. Ikisi de PROFIL KILIDI hatasina karsi bir
+    kez temizleyip yeniden deniyor (bkz. clear_stale_profile_lock).
+
+    CANLI ISTEK (kullanici): bazi bilgisayarlarda Google Chrome kurulu
+    olmuyor ama Microsoft Edge (Windows'ta VARSAYILAN olarak hazir gelir)
+    kurulu oluyor - onceden boyle bir makinede program SADECE "Chrome'u
+    kur" diyen bir hata verip tamamen kullanilamaz durumda kaliyordu.
+    Edge de Chromium tabanli GERCEK bir tarayici oldugu icin (bkz.
+    browser_launch_kwargs docstring'i) ayni otomasyon-tespiti onlemleri
+    ayni sekilde gecerli - SSO akisi acisindan Chrome'dan farkli bir risk
+    tasimiyor.
+
+    Bu fonksiyon eskiden gui.py/scan_course.py/scan_grade_center.py/
+    capture.py/scan_students.py'de AYNI (Chrome + profil-kilidi-yeniden-
+    deneme) mantigi 5 KEZ tekrarlanan koddan cikarildi - Edge-fallback'i
+    5 ayri yerde ayri ayri eklemek yerine, TEK bir yerde eklenip her
+    cagiran tarafin otomatik olarak faydalanmasi icin.
+
+    Chrome DA Edge DE bulunamazsa (is_chrome_missing_error/
+    is_browser_missing_error), en sondaki (Edge denemesinden gelen)
+    istisna oldugu gibi yukari firlatilir - cagiran taraf (gui.py) bunu
+    is_browser_missing_error ile yakalayip kullaniciya net bir mesaj
+    gosterir."""
+
+    def _launch(channel: str) -> BrowserContext:
+        try:
+            return p.chromium.launch_persistent_context(
+                str(profile_dir), headless=False, **browser_launch_kwargs(channel=channel)
+            )
+        except Exception as exc:
+            # Sadece PROFIL KILIDI hatasindan sonra (zorla kapatma/coke
+            # sonrasi yetim SingletonLock) temizleyip bir kez daha
+            # deniyoruz - bkz. clear_stale_profile_lock docstring'i.
+            if not is_profile_lock_error(exc):
+                raise
+            clear_stale_profile_lock(profile_dir)
+            return p.chromium.launch_persistent_context(
+                str(profile_dir), headless=False, **browser_launch_kwargs(channel=channel)
+            )
+
+    try:
+        return _launch("chrome")
+    except Exception as exc:
+        if not is_chrome_missing_error(exc):
+            raise
+        return _launch("msedge")
 
 
 def derive_course_label(page) -> str:

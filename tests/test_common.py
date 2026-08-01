@@ -160,6 +160,108 @@ def test_is_chrome_missing_error_ignores_unrelated_errors():
     assert not common.is_chrome_missing_error(RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
 
 
+def test_is_browser_missing_error_recognizes_msedge_channel_message():
+    # is_chrome_missing_error SADECE 'chrome' kanalina ozel - launch_browser_
+    # context Edge'e dustukten SONRA Edge DE bulunamazsa Playwright ayni
+    # kalipta ama 'msedge' gecen bir mesaj veriyor. is_browser_missing_error
+    # kanaldan BAGIMSIZ olarak bunu da tanimali.
+    exc = RuntimeError(
+        "BrowserType.launch: Chromium distribution 'msedge' is not found at ...\n"
+        'Run "playwright install msedge"'
+    )
+
+    assert common.is_browser_missing_error(exc)
+
+
+def test_is_browser_missing_error_ignores_unrelated_errors():
+    assert not common.is_browser_missing_error(RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
+
+
+# ---------- launch_browser_context / Chrome yoksa Edge'e dusme ----------
+# CANLI ISTEK (kullanici): bazi bilgisayarlarda Google Chrome kurulu
+# olmuyor ama Microsoft Edge kurulu oluyor - bu grup, Chrome bulunamazsa
+# otomatik olarak Edge'in denendigini, gercek bir tarayici ACMADAN
+# (sahte/stub bir Playwright nesnesiyle) dogruluyor.
+
+
+class _FakeChromiumLauncher:
+    """launch_persistent_context cagrilarini kaydeden, istenen sirada
+    basarili/basarisiz sonuc donduren sahte `p.chromium` nesnesi."""
+
+    def __init__(self, outcomes):
+        # outcomes: her cagrida sirayla tuketilecek [(channel, sonuc_veya_istisna), ...]
+        self._outcomes = list(outcomes)
+        self.calls = []
+
+    def launch_persistent_context(self, user_data_dir, headless=False, **kwargs):
+        channel = kwargs.get("channel")
+        self.calls.append(channel)
+        if not self._outcomes:
+            raise AssertionError("Beklenenden fazla launch_persistent_context cagrisi")
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+class _FakePlaywright:
+    def __init__(self, outcomes):
+        self.chromium = _FakeChromiumLauncher(outcomes)
+
+
+def test_launch_browser_context_uses_chrome_when_available(tmp_path):
+    fake_context = object()
+    p = _FakePlaywright([fake_context])
+
+    result = common.launch_browser_context(p, tmp_path)
+
+    assert result is fake_context
+    assert p.chromium.calls == ["chrome"]
+
+
+def test_launch_browser_context_falls_back_to_edge_when_chrome_missing(tmp_path):
+    chrome_missing = RuntimeError(
+        "BrowserType.launch: Chromium distribution 'chrome' is not found at ...\n"
+        'Run "playwright install chrome"'
+    )
+    fake_context = object()
+    p = _FakePlaywright([chrome_missing, fake_context])
+
+    result = common.launch_browser_context(p, tmp_path)
+
+    assert result is fake_context
+    assert p.chromium.calls == ["chrome", "msedge"]
+
+
+def test_launch_browser_context_raises_if_neither_browser_available(tmp_path):
+    chrome_missing = RuntimeError(
+        "BrowserType.launch: Chromium distribution 'chrome' is not found at ...\n"
+        'Run "playwright install chrome"'
+    )
+    msedge_missing = RuntimeError(
+        "BrowserType.launch: Chromium distribution 'msedge' is not found at ...\n"
+        'Run "playwright install msedge"'
+    )
+    p = _FakePlaywright([chrome_missing, msedge_missing])
+
+    with pytest.raises(RuntimeError, match="msedge"):
+        common.launch_browser_context(p, tmp_path)
+
+    assert p.chromium.calls == ["chrome", "msedge"]
+
+
+def test_launch_browser_context_does_not_fall_back_to_edge_for_unrelated_errors(tmp_path):
+    # Chrome kurulu ama BASKA bir sebeple (ör. ag hatasi) basarisiz olursa
+    # Edge'e DUSMEMELI - bu durum "Chrome eksik" degil, farkli bir sorun.
+    unrelated = RuntimeError("net::ERR_NAME_NOT_RESOLVED")
+    p = _FakePlaywright([unrelated])
+
+    with pytest.raises(RuntimeError, match="ERR_NAME_NOT_RESOLVED"):
+        common.launch_browser_context(p, tmp_path)
+
+    assert p.chromium.calls == ["chrome"]
+
+
 def test_is_profile_lock_error_recognizes_singleton_lock_message():
     assert common.is_profile_lock_error("SingletonLock already exists, failed to create a Chrome process")
 

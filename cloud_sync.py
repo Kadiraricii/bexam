@@ -107,14 +107,32 @@ class CloudSyncManager:
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def _delete_remote_session(self, ref_code: str) -> None:
+        """Vercel üzerindeki eski ref_code oturumunu siler / geçersiz kılar."""
+        try:
+            payload = {"ref_code": ref_code, "action": "delete"}
+            json_bytes = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                f"{self.vercel_url}/api/sync",
+                data=json_bytes,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=4):
+                pass
+        except Exception:
+            pass
+
     def regenerate_credentials(self) -> tuple[str, str]:
-        """Yeni bir Referans Kodu ve PIN üretir."""
+        """Yeni bir Referans Kodu ve PIN üretir ve eski oturumu Vercel'den siler."""
         with self._lock:
+            old_ref = self.ref_code
             self.ref_code = generate_ref_code()
             self.pin = generate_pin()
             self.last_sync_time = None
             self.last_error = None
-            return self.ref_code, self.pin
+        self._delete_remote_session(old_ref)
+        return self.ref_code, self.pin
 
     def start(self) -> None:
         """Arka plan senkronizasyon thread'ini başlatır."""
@@ -125,13 +143,15 @@ class CloudSyncManager:
         self._thread.start()
 
     def stop(self) -> None:
-        """Senkronizasyon thread'ini durdurur."""
+        """Senkronizasyon thread'ini durdurur ve Vercel oturumunu siler."""
         if not self.is_running:
             return
+        old_ref = self.ref_code
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=3.0)
             self._thread = None
+        self._delete_remote_session(old_ref)
 
     def sync_once(self) -> tuple[bool, str]:
         """Anlık tek bir senkronizasyon POST isteği gönderir."""

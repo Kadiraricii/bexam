@@ -22,11 +22,9 @@ from common import (
     OUTPUT_DIR,
     PROFILE_DIR,
     append_log,
-    browser_launch_kwargs,
-    clear_stale_profile_lock,
     ensure_safe_full_path,
     extract_page_info,
-    is_profile_lock_error,
+    launch_browser_context,
     live_url,
     now_stamp,
     resolve_active_page,
@@ -612,21 +610,10 @@ def main() -> None:
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        try:
-            context = p.chromium.launch_persistent_context(
-                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-            )
-        except Exception as exc:
-            # gui.py'deki ayni pattern: sadece PROFIL KILIDI hatasindan
-            # sonra (zorla kapatma/coke sonrasi yetim SingletonLock)
-            # temizleyip bir kez daha deniyoruz - bkz.
-            # clear_stale_profile_lock docstring'i.
-            if not is_profile_lock_error(exc):
-                raise
-            clear_stale_profile_lock(PROFILE_DIR)
-            context = p.chromium.launch_persistent_context(
-                str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-            )
+        # launch_browser_context: once Chrome dener, kurulu degilse
+        # otomatik Microsoft Edge'e duser, PROFIL KILIDI hatasinda da
+        # bir kez temizleyip yeniden dener - bkz. o fonksiyonun docstring'i.
+        context = launch_browser_context(p, PROFILE_DIR)
 
         try:
             page = context.pages[0] if context.pages else context.new_page()

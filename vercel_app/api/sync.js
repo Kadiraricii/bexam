@@ -20,11 +20,21 @@ module.exports = async (req, res) => {
       body = JSON.parse(body);
     }
 
-    if (!body || !body.ref_code || !body.pin || !body.data) {
-      return res.status(400).json({ error: "Eksik parametreler (ref_code, pin, data)" });
+    if (!body || !body.ref_code) {
+      return res.status(400).json({ error: "Eksik parametreler (ref_code)" });
     }
 
     const key = String(body.ref_code).trim().toUpperCase();
+
+    if (body.action === "delete") {
+      store.delete(key);
+      return res.status(200).json({ success: true, deleted: true, ref_code: key });
+    }
+
+    if (!body.pin || !body.data) {
+      return res.status(400).json({ error: "Eksik parametreler (pin, data)" });
+    }
+
     store.set(key, {
       pin: String(body.pin).trim(),
       timestamp: body.timestamp || Date.now() / 1000,

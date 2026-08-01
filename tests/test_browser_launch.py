@@ -11,6 +11,7 @@ Google Chrome'u ACIKCA kurup bu testlerin GERCEKTEN calismasini,
 sessizce atlanmamasini saglar.
 """
 
+from unittest.mock import MagicMock
 import pytest
 from playwright.sync_api import sync_playwright
 
@@ -29,8 +30,21 @@ def _chrome_available() -> bool:
         return False
 
 
+def _edge_available() -> bool:
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="msedge", headless=True)
+            browser.close()
+        return True
+    except Exception:
+        return False
+
+
 requires_chrome = pytest.mark.skipif(
     not _chrome_available(), reason="Bu makinede/runner'da gerçek Google Chrome bulunamadı"
+)
+requires_edge = pytest.mark.skipif(
+    not _edge_available(), reason="Bu makinede/runner'da gerçek Microsoft Edge bulunamadı"
 )
 
 
@@ -479,3 +493,47 @@ def test_is_chrome_missing_error_recognizes_real_playwright_message_format():
     )
 
     assert common.is_chrome_missing_error(exc)
+    assert common.is_browser_missing_error(exc)
+
+
+def test_is_chrome_missing_error_various_message_formats():
+    assert common.is_chrome_missing_error("Executable doesn't exist at /usr/bin/google-chrome")
+    assert common.is_chrome_missing_error("cannot find chrome binary")
+    assert common.is_chrome_missing_error("failed to launch chrome")
+
+
+def test_launch_browser_context_falls_back_to_msedge_when_chrome_missing(tmp_path):
+    mock_p = MagicMock()
+    mock_context = MagicMock()
+
+    def mock_launch_persistent_context(dir_str, **kwargs):
+        if kwargs.get("channel") == "chrome":
+            raise RuntimeError("Chromium distribution 'chrome' is not found at /path/to/chrome")
+        return mock_context
+
+    mock_p.chromium.launch_persistent_context.side_effect = mock_launch_persistent_context
+
+    ctx = common.launch_browser_context(mock_p, tmp_path)
+    assert ctx == mock_context
+    assert mock_p.chromium.launch_persistent_context.call_count == 2
+    # Second call should use channel="msedge"
+    last_call_kwargs = mock_p.chromium.launch_persistent_context.call_args_list[1][1]
+    assert last_call_kwargs["channel"] == "msedge"
+
+
+@requires_edge
+def test_real_edge_launches_and_generates_pdf_when_available(tmp_path):
+    profile_dir = tmp_path / "edge_profile"
+    kwargs = common.browser_launch_kwargs(channel="msedge")
+    kwargs["headless"] = True
+
+    with sync_playwright() as p:
+        context = p.chromium.launch_persistent_context(str(profile_dir), **kwargs)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.set_content("<html><body><h1>Edge PDF Test</h1></body></html>")
+            pdf_bytes = page.pdf(format="A4", print_background=True)
+            assert len(pdf_bytes) > 0
+            assert pdf_bytes.startswith(b"%PDF")
+        finally:
+            context.close()

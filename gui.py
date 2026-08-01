@@ -56,9 +56,7 @@ from common import (
     STUDENT_ROSTER_CSV_FILENAME,
     already_captured_titles,
     append_download_log,
-    browser_launch_kwargs,
     check_output_writable,
-    clear_stale_profile_lock,
     cloud_sync_warning,
     collect_download_overview,
     DEFAULT_FOLDER_MAX_CHARS,
@@ -66,8 +64,9 @@ from common import (
     find_blackboard_pages,
     has_seen_onboarding,
     is_browser_closed_error,
-    is_chrome_missing_error,
+    is_browser_missing_error,
     is_profile_lock_error,
+    launch_browser_context,
     live_url,
     load_student_roster,
     mark_onboarding_seen,
@@ -876,11 +875,12 @@ class BlackboardGUI:
         inner.pack(fill="x", padx=14, pady=10)
 
         header_row = tk.Frame(inner, bg=COLOR_WARNING_SOFT)
-        header_row.pack(fill="x")
+        header_row.pack(fill="x", pady=(0, 4))
+        tk.Label(header_row, text="⚠", bg=COLOR_WARNING_SOFT, font=_emoji_font(13, "bold")).pack(side="left", padx=(0, 6))
         tk.Label(
-            header_row, text="⚠  Beklenen Bir Tarayıcı Uyarısı", bg=COLOR_WARNING_SOFT,
+            header_row, text="Beklenen Bir Tarayıcı Uyarısı", bg=COLOR_WARNING_SOFT,
             fg=COLOR_WARNING, font=("", 13, "bold"), anchor="w",
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(side="left")
 
         body = tk.Frame(inner, bg=COLOR_WARNING_SOFT)
         tk.Label(
@@ -1100,11 +1100,13 @@ class BlackboardGUI:
         info_card = tk.Frame(right, bg=COLOR_ACCENT_SOFT)
         info_card.pack(side="bottom", fill="x", padx=40, pady=(0, 16))
         info_inner = tk.Frame(info_card, bg=COLOR_ACCENT_SOFT)
-        info_inner.pack(fill="x", padx=16, pady=12)
+        info_head = tk.Frame(info_inner, bg=COLOR_ACCENT_SOFT)
+        info_head.pack(fill="x", pady=(0, 4))
+        tk.Label(info_head, text="ℹ", bg=COLOR_ACCENT_SOFT, font=_emoji_font(14, "bold")).pack(side="left", padx=(0, 6))
         tk.Label(
-            info_inner, text="ℹ  Önemli Not", bg=COLOR_ACCENT_SOFT, fg=COLOR_ACCENT,
+            info_head, text="Önemli Not", bg=COLOR_ACCENT_SOFT, fg=COLOR_ACCENT,
             font=("", 15, "bold"), anchor="w",
-        ).pack(fill="x")
+        ).pack(side="left")
         tk.Label(
             info_inner,
             text="Bu program yalnızca tarayıcınızı otomatikleştirir. Giriş "
@@ -1303,10 +1305,13 @@ class BlackboardGUI:
 
         output_card = tk.Frame(footer, bg=COLOR_GHOST_HOVER, highlightthickness=0)
         output_card.pack(fill="x", pady=(0, 10))
+        output_head = tk.Frame(output_card, bg=COLOR_GHOST_HOVER)
+        output_head.pack(fill="x", padx=10, pady=(8, 0))
+        tk.Label(output_head, text="📂", bg=COLOR_GHOST_HOVER, font=_emoji_font(12)).pack(side="left", padx=(0, 4))
         tk.Label(
-            output_card, text="📂  Çıktı Klasörü", bg=COLOR_GHOST_HOVER, fg=COLOR_MUTED,
+            output_head, text="Çıktı Klasörü", bg=COLOR_GHOST_HOVER, fg=COLOR_MUTED,
             font=FONT_MUTED_BOLD, anchor="w",
-        ).pack(fill="x", padx=10, pady=(8, 0))
+        ).pack(side="left")
         self.sidebar_output_label = tk.Label(
             output_card, textvariable=self.output_dir_var, bg=COLOR_GHOST_HOVER, fg=COLOR_TEXT,
             font=("", 11), anchor="w", justify="left", wraplength=190,
@@ -1813,10 +1818,13 @@ class BlackboardGUI:
             widget.destroy()
 
         if not self.output_dir.exists():
+            empty_row = tk.Frame(body, bg=COLOR_BG)
+            empty_row.pack(fill="x", pady=8)
+            tk.Label(empty_row, text="📁", bg=COLOR_BG, font=_emoji_font(13)).pack(side="left", padx=(0, 6))
             tk.Label(
-                body, text="📁  Klasör henüz oluşturulmadı (ilk indirmede oluşacak)",
+                empty_row, text="Klasör henüz oluşturulmadı (ilk indirmede oluşacak)",
                 bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
-            ).pack(fill="x", pady=8)
+            ).pack(side="left")
             return
 
         download_data = collect_download_overview(self.output_dir)
@@ -1874,10 +1882,13 @@ class BlackboardGUI:
         section = tk.Frame(body, bg=COLOR_BG)
         section.pack(fill="x", pady=(0, 28))
 
+        sec_head = tk.Frame(section, bg=COLOR_BG)
+        sec_head.pack(fill="x", pady=(0, 10))
+        tk.Label(sec_head, text="📁", bg=COLOR_BG, font=_emoji_font(15, "bold")).pack(side="left", padx=(0, 6))
         tk.Label(
-            section, text=f"📁 {course_dir.name}", bg=COLOR_BG, fg=COLOR_TEXT,
+            sec_head, text=course_dir.name, bg=COLOR_BG, fg=COLOR_TEXT,
             font=("", 15, "bold"), anchor="w",
-        ).pack(fill="x", pady=(0, 10))
+        ).pack(side="left")
 
         if not exams:
             tk.Label(
@@ -1998,9 +2009,12 @@ class BlackboardGUI:
 
         head = tk.Frame(dialog, bg=COLOR_CARD, padx=20, pady=16)
         head.pack(fill="x")
+        head_row = tk.Frame(head, bg=COLOR_CARD)
+        head_row.pack(fill="x")
+        tk.Label(head_row, text="📁", bg=COLOR_CARD, font=_emoji_font(16, "bold")).pack(side="left", padx=(0, 6))
         tk.Label(
-            head, text=f"📁 {exam_name}", bg=COLOR_CARD, fg=COLOR_TEXT, font=("", 16, "bold"), anchor="w"
-        ).pack(fill="x")
+            head_row, text=exam_name, bg=COLOR_CARD, fg=COLOR_TEXT, font=("", 16, "bold"), anchor="w"
+        ).pack(side="left")
         tk.Label(
             head, text=f"Bu sınavda toplam {len(missing)} öğrencinin PDF'i eksik.",
             bg=COLOR_CARD, fg=COLOR_WARNING, font=("", 12), anchor="w"
@@ -2288,10 +2302,13 @@ class BlackboardGUI:
         senkronize eder."""
         card = self._make_card(wrapper)
         card.pack(fill="x", pady=(16, 0))
+        cloud_head = tk.Frame(card.inner, bg=COLOR_CARD)
+        cloud_head.pack(fill="x", anchor="w", pady=(0, 8))
+        tk.Label(cloud_head, text="☁️", bg=COLOR_CARD, font=_emoji_font(16, "bold")).pack(side="left", padx=(0, 6))
         tk.Label(
-            card.inner, text="☁️  Vercel Bulut Canlı Yayın Paneli (Referans Kodu + PIN)",
+            cloud_head, text="Vercel Bulut Canlı Yayın Paneli (Referans Kodu + PIN)",
             bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_SECTION,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(side="left")
         tk.Label(
             card.inner,
             text="Localhost yerine internet üzerindeki Vercel sitesinde sınav durumunu "
@@ -2347,10 +2364,13 @@ class BlackboardGUI:
         bilgisayar) goruntulemeye acar/kapatir - bkz. web_view.py."""
         card = self._make_card(wrapper)
         card.pack(fill="x", pady=(16, 0))
+        web_head = tk.Frame(card.inner, bg=COLOR_CARD)
+        web_head.pack(fill="x", anchor="w", pady=(0, 8))
+        tk.Label(web_head, text="🖥️", bg=COLOR_CARD, font=_emoji_font(16, "bold")).pack(side="left", padx=(0, 6))
         tk.Label(
-            card.inner, text="🖥️  Canlı Durum Sayfası (Web Görünümü)",
+            web_head, text="Canlı Durum Sayfası (Web Görünümü)",
             bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_SECTION,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(side="left")
         tk.Label(
             card.inner,
             text="İndirme sayfasındaki sınav tamamlanma durumunu (hangi sınavda "
@@ -2723,26 +2743,11 @@ class BlackboardGUI:
                     elif command == "open_browser":
                         try:
                             PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                            try:
-                                context = p.chromium.launch_persistent_context(
-                                    str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-                                )
-                            except Exception as exc:
-                                # Kilit dosyalarini PROAKTIF (her denemede once)
-                                # degil, sadece launch GERCEKTEN kilit hatasiyla
-                                # basarisiz olduktan SONRA temizleyip bir kez
-                                # daha deniyoruz - bkz. clear_stale_profile_lock
-                                # docstring'i. Proaktif temizlik, Unix'te dosya
-                                # kilitlemesi olmadigi icin hala CANLI baska bir
-                                # Chrome surecinin kilidini de sessizce silip iki
-                                # surecin ayni profile ayni anda yazmasina (oturum/
-                                # cookie bozulmasina) yol acabiliyordu.
-                                if not is_profile_lock_error(exc):
-                                    raise
-                                clear_stale_profile_lock(PROFILE_DIR)
-                                context = p.chromium.launch_persistent_context(
-                                    str(PROFILE_DIR), headless=False, **browser_launch_kwargs()
-                                )
+                            # launch_browser_context: once Chrome dener, kurulu
+                            # degilse otomatik Microsoft Edge'e duser, PROFIL
+                            # KILIDI hatasinda da bir kez temizleyip yeniden
+                            # dener - bkz. o fonksiyonun docstring'i.
+                            context = launch_browser_context(p, PROFILE_DIR)
                         except Exception as exc:
                             # Baslatma basarisizsa yarim bir context kalmasin -
                             # aksi halde bos-zaman URL dongusu olu context'e
@@ -3429,13 +3434,19 @@ class BlackboardGUI:
                     "Tarayıcı açılamadı. Program zaten başka bir pencerede "
                     "açık olabilir — diğer pencereyi (varsa) kapatıp tekrar dene.",
                 )
-            elif payload and is_chrome_missing_error(payload):
+            elif payload and is_browser_missing_error(payload):
+                # bkz. common.launch_browser_context docstring'i: bu noktaya
+                # gelindiyse hem Chrome HEM Edge denenmis, ikisi de basarisiz
+                # olmus demektir (Chrome kuruluysa/Edge kuruluysa zaten
+                # sessizce ilgili tarayiciya gecilirdi, buraya hic dusulmezdi).
                 messagebox.showerror(
-                    "Google Chrome bulunamadı",
-                    "Bu program gerçek Google Chrome tarayıcısını kullanıyor "
-                    "ama bilgisayarda kurulu görünmüyor.\n\n"
-                    "Şu adresten Chrome'u kurup programı tekrar başlat:\n"
-                    "https://www.google.com/chrome/",
+                    "Google Chrome veya Microsoft Edge bulunamadı",
+                    "Bu program gerçek Google Chrome ya da Microsoft Edge "
+                    "tarayıcısını kullanıyor ama bilgisayarda ikisi de kurulu "
+                    "görünmüyor.\n\n"
+                    "Şu adreslerden birini kurup programı tekrar başlat:\n"
+                    "https://www.google.com/chrome/\n"
+                    "https://www.microsoft.com/edge",
                 )
             else:
                 messagebox.showerror("Hata", f"Tarayıcı açılamadı: {payload}")
