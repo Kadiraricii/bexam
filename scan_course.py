@@ -314,11 +314,14 @@ def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
     yuzden once kisa bir sure ONAY metnini bekliyoruz, sadece o
     basarisiz olursa ikinci tiklamaya geciyoruz.
 
-    NOT: ikinci tiklamanin secici (selector) tahmini CANLI Blackboard
-    oturumunda henuz dogrulanmadi - burada hata alinirsa terminal
-    ciktisi paylasilip secici duzeltilmeli (bkz. capture.py/
-    scan_grade_center.py'deki benzer "tek ekran goruntusune bakilarak
-    yazildi" notlari)."""
+    NOT: ikinci tiklamanin yonu (Gönderimler tablosundaki bir ogrenci
+    satirina tiklamak) CANLI Blackboard oturumunda dogrulandi - tiklanan
+    sayfa gercekten ONAY koduyla acilan Degerlendirme sayfasi. Ilk
+    denemede yine de "ONAY kodu gorunmedi" hatasi alinmisti; sebep secici
+    degil SURE'ydi - bu sayfa butun sinav sorularini/siklarini yukledigi
+    icin basit bir Not Defteri satirindan cok daha AGIR aciliyor, 10
+    saniyelik bekleme yetersiz kalabiliyor - bu yuzden asagida daha
+    comert bir sure taniniyor."""
     try:
         page.wait_for_selector("text=ONAY:", timeout=4_000)
         return
@@ -332,10 +335,13 @@ def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
         # yapilmis olabilir (ör. <tr onclick=...> ya da <div role="row">) -
         # bu durumda button/a hic bulunamaz, satirin KENDISINE tikliyoruz.
         if clickable.count() > 0:
-            clickable.click(timeout=5_000)
+            clickable.click(timeout=8_000)
         else:
-            submission_row.click(timeout=5_000)
-        page.wait_for_selector("text=ONAY:", timeout=10_000)
+            submission_row.click(timeout=8_000)
+        # bkz. yukaridaki NOT: bu sayfa TUM sinav icerigini yukledigi icin
+        # agir aciliyor - 25 saniye, onceki 10 saniyenin CANLI oturumda
+        # yetersiz kaldigi gozlemlenerek buyutulmus hali.
+        page.wait_for_selector("text=ONAY:", timeout=25_000)
     except PlaywrightTimeoutError as exc:
         raise NotSubmittedOrNotExam(
             f"'{row_name}' icin ONAY kodu gorunmedi (ne dogrudan ne de "
