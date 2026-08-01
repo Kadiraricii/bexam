@@ -106,7 +106,11 @@ ATTENDANCE_CATEGORY_MARKER = "Günlük"
 # olarak "Tüm Öğrenci Durumları" acilir (bkz. kullanicinin ekran
 # goruntusu) - "Gönderildi"ye ayarlanirsa hic gonderilmemis/taslak
 # ogrenciler tabloya HIC girmez, satir secimi kokten basitlesir (bkz.
-# _filter_submissions_to_submitted).
+# _filter_submissions_to_submitted). ID/data-value CANLI DOM'dan alindi
+# (kullanicinin paylastigi HTML): tetikleyici role="combobox" olan
+# <div id="submission-list-dropdown-filters-student-status">, secenek
+# ise role="option" data-value="Gönderildi" olan bir <li>.
+STUDENT_STATUS_FILTER_TRIGGER_ID = "submission-list-dropdown-filters-student-status"
 STUDENT_STATUS_FILTER_LABEL = "Öğrenci Durumu"
 STUDENT_STATUS_FILTER_DEFAULT_TEXT = "Tüm Öğrenci Durumları"
 SUBMITTED_FILTER_OPTION = "Gönderildi"
@@ -344,33 +348,45 @@ def _filter_submissions_to_submitted(page: Page) -> None:
     kokten basitlesir (kullanicinin talebi - bkz. ekran goruntusundeki
     filtre acilir menusu: varsayilan 'Tüm Öğrenci Durumları' secili).
 
-    ZORUNLU DEGIL: bu adimin seçicileri CANLI oturumda henuz dogrulanmadi
-    (hata alinirsa terminal/log ciktisi paylasilip duzeltilmeli) - basarisiz
+    ZORUNLU DEGIL: bu adimin BIRINCIL seçicisi (ID) CANLI DOM'dan
+    dogrulandi, ama yedekler (role/metin bazli) hala tahmin - basarisiz
     olursa SESSIZCE devam edilir, cunku _first_complete_status_row filtre
     olmadan da dogru satiri buluyor; bu sadece ekstra bir basitlestirme,
     olmazsa olmaz bir on-kosul degil."""
     try:
-        page.get_by_role("button", name=re.compile(STUDENT_STATUS_FILTER_LABEL)).first.click(
+        page.locator(f"#{STUDENT_STATUS_FILTER_TRIGGER_ID}").click(timeout=3_000)
+    except PlaywrightTimeoutError:
+        # ID Blackboard surumleri arasinda degisirse diye yedek: gercek
+        # eleman role="combobox" (role="button" DEGIL - onceki hatanin
+        # sebebi buydu) ve aria-labelledby ile "Öğrenci Durumu" etiketine
+        # bagli.
+        try:
+            page.get_by_role("combobox", name=re.compile(STUDENT_STATUS_FILTER_LABEL)).first.click(
+                timeout=3_000
+            )
+        except PlaywrightTimeoutError:
+            try:
+                page.get_by_text(STUDENT_STATUS_FILTER_DEFAULT_TEXT, exact=True).first.click(
+                    timeout=3_000
+                )
+            except PlaywrightTimeoutError:
+                return
+
+    try:
+        page.locator(f'[role="option"][data-value="{SUBMITTED_FILTER_OPTION}"]').first.click(
             timeout=3_000
         )
     except PlaywrightTimeoutError:
         try:
-            page.get_by_text(STUDENT_STATUS_FILTER_DEFAULT_TEXT, exact=True).first.click(
-                timeout=3_000
-            )
+            page.get_by_role(
+                "option", name=re.compile(f"^{re.escape(SUBMITTED_FILTER_OPTION)}$")
+            ).first.click(timeout=3_000)
         except PlaywrightTimeoutError:
             return
-
-    try:
-        page.get_by_role(
-            "option", name=re.compile(f"^{re.escape(SUBMITTED_FILTER_OPTION)}$")
-        ).first.click(timeout=3_000)
-        # Tablonun filtreye gore yeniden render olmasi icin kisa bir pay -
-        # hemen _first_complete_status_row'a gecersek eski (filtresiz)
-        # satirlari gorebiliriz.
-        page.wait_for_timeout(500)
-    except PlaywrightTimeoutError:
-        pass
+    # Tablonun filtreye gore yeniden render olmasi icin kisa bir pay -
+    # hemen _first_complete_status_row'a gecersek eski (filtresiz)
+    # satirlari gorebiliriz.
+    page.wait_for_timeout(500)
 
 
 def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
