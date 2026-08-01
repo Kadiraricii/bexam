@@ -14,23 +14,35 @@ import pytest
 
 import gui as gui_module
 
-# CANLI DOGRULANAN bir cokme: tum test suite'i TEK bir surecte
+# CANLI DOGRULANAN bir cokme (hem yerelde HEM GERCEK GITHUB ACTIONS CI'DA,
+# macOS VE Windows'ta AYRI AYRI): tum test suite'i TEK bir surecte
 # calistirildiginda (test_browser_launch.py'nin GERCEK Playwright/Chrome
 # ornekleri + test_web_view.py'nin GERCEK HTTP sunucu thread'leri bir
 # arada), araya giren bir dongusel-cop-toplama (cyclic GC) taramasi
 # native bir C uzantisinin (greenlet - Playwright'in senkron API'sinin
-# alt yapisi) ic durumuyla catisip "Fatal Python error: Aborted" ile
-# butun pytest surecini cokertebiliyordu (bkz. asagidaki tk_root
+# alt yapisi) ic durumuyla catisip surecin TAMAMEN cokmesine yol
+# acabiliyordu - macOS'ta "Fatal Python error: Aborted", Windows'ta
+# "Windows fatal exception: code 0x80000003" (bkz. asagidaki tk_root
 # fixture'indeki benzer, ONCEDEN bulunmus Tk+threading cokme kategorisi -
-# bu AYNI ailenin yeni bir ornegi). gc.disable() sorunu TAMAMEN cozuyor
-# ama tum coplari toplamayi tamamen durdurup suiti ~20 kat yavaslatiyor
+# bu AYNI ailenin yeni bir ornegi).
+#
+# ASIL/KOKTEN cozum burada DEGIL, .github/workflows/tests.yml'de:
+# test_browser_launch.py artik AYRI bir pytest cagrisinda (dolayisiyla
+# AYRI bir Python surecinde) calistiriliyor - iki kirilgan kategori artik
+# HICBIR ZAMAN ayni surecte bulusmuyor, bu deterministik bir cozum.
+#
+# Asagidaki gc.freeze() ise IKINCI bir savunma hatti: gelistiricinin
+# yerelde TUM test dosyalarini (test_browser_launch.py dahil) TEK
+# `pytest tests/` cagrisiyla calistirdigi senaryoda hala bir katman
+# koruma saglasin diye kaliyor. gc.disable() sorunu TAMAMEN cozuyor ama
+# tum coplari toplamayi tamamen durdurup suiti ~20 kat yavaslatiyor
 # (CANLI OLCULDU: 10sn -> 270sn+). gc.freeze() cok daha hedefli: su anki
 # (henuz hicbir agir nesne olusturulmamis) nesne grafigini KALICI
 # nesile dondurup GELECEKTEKI dongusel taramalarin kapsamindan cikarir -
 # collect() SONRADAN OLUSAN nesneler icin normal hizinda calismaya
 # devam eder, sadece riskli taramanin SIKLIGI/kapsam agirligi azalir.
-# CANLI OLCULDU: hem cokmeyi ortadan kaldiriyor HEM DE hiz normal
-# (~10sn) kaliyor.
+# ONEMLI: bu OLASILIKSAL bir azaltma, GARANTI DEGIL (CI'da hala
+# gozlemlendi) - bu yuzden process-izolasyonu YUKARIDAKI ASIL cozum.
 gc.collect()
 gc.freeze()
 

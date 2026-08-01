@@ -58,5 +58,22 @@ jobs:
         # pytest'ten once, hizlica yakalar.
         run: python -m py_compile gui.py common.py capture.py scan_course.py scan_grade_center.py
 
-      - name: pytest çalıştır
-        run: pytest -v
+      - name: pytest çalıştır (gerçek Playwright/Chrome testleri HARİÇ)
+        # test_browser_launch.py GERCEK Playwright/Chrome orneklerini
+        # baslatip kapatiyor. Bu, AYNI surecte web_view.py'nin GERCEK HTTP
+        # sunucu thread'leriyle (test_web_view.py) bir araya gelince CANLI
+        # DOGRULANAN bir cokmeye yol aciyordu: macOS'ta "Fatal Python
+        # error: Aborted", Windows'ta "Windows fatal exception: code
+        # 0x80000003" - ikisi de AYNI kok nedenden (dongusel cop
+        # toplayicinin - GC - native bir C uzantisiyla, Playwright'in
+        # greenlet altyapisiyla, yanlis anda catismasi). tests/conftest.py
+        # icindeki gc.freeze() bunu SIKLIGINI azaltiyor ama olasiliksal -
+        # KOKTEN cozum, iki kirilgan kategoriyi (gercek Playwright + gercek
+        # thread/soket kullanan testler) hic AYNI surece dusurmemek.
+        run: pytest -v --ignore=tests/test_browser_launch.py
+
+      - name: pytest çalıştır (gerçek Playwright/Chrome testleri, izole süreç)
+        # bkz. yukaridaki adimin aciklamasi - bu dosya BILEREK ayri bir
+        # pytest cagrisinda (dolayisiyla ayri bir Python surecinde)
+        # calistiriliyor.
+        run: pytest -v tests/test_browser_launch.py
