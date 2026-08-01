@@ -665,12 +665,6 @@
     let allMissingStudentsMaster = [];
     let pinVisible = false;
 
-    // ---------- Segmentli (OTP tarzi) giris kutulari ----------
-    // Ref kod ve PIN icin, her biri TEK karakter alan kucuk input kutulari
-    // olusturur; yazildikca otomatik bir sonraki kutuya gecer, Backspace
-    // ile bosken bir onceki kutuya doner, yapistirmada (paste) tum degeri
-    // kutulara dagitir. Boylece tek bir metin kutusu yerine 2FA/OTP
-    // ekranlarindaki gibi "segmentli" bir giris deneyimi olusur.
     function buildSegmentBoxes(containerEl, count, opts) {
       opts = opts || {};
       const boxes = [];
@@ -684,8 +678,12 @@
         box.dataset.index = String(i);
         box.addEventListener('input', () => {
           let v = box.value;
-          if (opts.numeric) v = v.replace(/[^0-9]/g, '');
-          else v = v.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+          if (!opts.numeric) {
+            v = v.replace(/^REF-?/i, '');
+            v = v.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+          } else {
+            v = v.replace(/[^0-9]/g, '');
+          }
           box.value = v.slice(-1);
           if (box.value) {
             box.classList.add('filled');
@@ -697,6 +695,11 @@
           if (opts.onChange) opts.onChange();
         });
         box.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            doLogin();
+            return;
+          }
           if (e.key === 'Backspace' && !box.value && i > 0) {
             boxes[i - 1].focus();
           } else if (e.key === 'ArrowLeft' && i > 0) {
@@ -708,13 +711,19 @@
         box.addEventListener('paste', (e) => {
           e.preventDefault();
           let text = (e.clipboardData || window.clipboardData).getData('text') || '';
-          text = opts.numeric ? text.replace(/[^0-9]/g, '') : text.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+          text = text.trim();
+          if (!opts.numeric) {
+            text = text.replace(/^REF-?/i, '');
+            text = text.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+          } else {
+            text = text.replace(/[^0-9]/g, '');
+          }
           for (let j = 0; j < text.length && i + j < count; j++) {
             boxes[i + j].value = text[j];
             boxes[i + j].classList.add('filled');
           }
-          const lastIdx = Math.min(i + text.length, count - 1);
-          boxes[lastIdx].focus();
+          const lastIdx = Math.min(i + text.length - 1, count - 1);
+          if (boxes[lastIdx]) boxes[lastIdx].focus();
           if (opts.onChange) opts.onChange();
         });
         containerEl.appendChild(box);
@@ -728,19 +737,32 @@
     }
 
     function setBoxesValue(boxes, value) {
-      const chars = (value || '').split('');
+      let val = (value || '').replace(/^REF-?/i, '');
+      const chars = val.split('');
       boxes.forEach((b, i) => {
         b.value = chars[i] || '';
         b.classList.toggle('filled', Boolean(b.value));
       });
     }
 
-    const refBoxes = buildSegmentBoxes(document.getElementById('ref-box-row'), 4, { numeric: false });
-    const pinBoxes = buildSegmentBoxes(document.getElementById('pin-box-row'), 4, { numeric: true, password: true });
-    // PIN kutu grubu, "Göster/Gizle" dugmesinden SONRA DOM'a eklenmis
-    // olmali - kutular container'a appendChild ile eklendigi icin dugme
-    // (zaten HTML'de var olan) otomatik olarak EN SONA degil, kutulardan
-    // SONRA kalir; gorsel sira duzeltmesi asagida yapiliyor.
+    const refBoxes = buildSegmentBoxes(document.getElementById('ref-box-row'), 4, {
+      numeric: false,
+      onChange: () => {
+        if (getBoxesValue(refBoxes).length === 4) {
+          pinBoxes[0].focus();
+        }
+      }
+    });
+    const pinBoxes = buildSegmentBoxes(document.getElementById('pin-box-row'), 4, {
+      numeric: true,
+      password: true,
+      onChange: () => {
+        if (getBoxesValue(refBoxes).length === 4 && getBoxesValue(pinBoxes).length === 4) {
+          doLogin();
+        }
+      }
+    });
+
     document.getElementById('pin-box-row').appendChild(
       document.querySelector('.segment-toggle')
     );
@@ -752,7 +774,7 @@
     }
 
     if (activeRef && activePin) {
-      setBoxesValue(refBoxes, activeRef.replace(/^REF-/, ''));
+      setBoxesValue(refBoxes, activeRef);
       setBoxesValue(pinBoxes, activePin);
       doLogin();
     }
@@ -774,7 +796,8 @@
     }
 
     function hideStatus() {
-      document.getElementById('auth-status').style.display = 'none';
+      const el = document.getElementById('auth-status');
+      if (el) el.style.display = 'none';
     }
 
     function setLoginLoading(loading) {
@@ -804,11 +827,13 @@
     }
 
     async function doLogin() {
-      const ref = 'REF-' + getBoxesValue(refBoxes).toUpperCase();
+      let rawRef = getBoxesValue(refBoxes).toUpperCase();
+      rawRef = rawRef.replace(/^REF-?/i, '');
+      const ref = 'REF-' + rawRef;
       const pin = getBoxesValue(pinBoxes);
       hideStatus();
 
-      if (getBoxesValue(refBoxes).length < 4 || pin.length < 4) {
+      if (rawRef.length < 4 || pin.length < 4) {
         showStatus('Lütfen 4 haneli Referans Kodu ve 4 haneli PIN kodunun tamamını gir.', 'warn');
         return;
       }

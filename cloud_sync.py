@@ -25,7 +25,7 @@ from typing import Any
 from common import collect_download_overview, summarize_download_overview
 
 DEFAULT_VERCEL_URL = "https://web-procress.vercel.app"
-SYNC_INTERVAL_SECONDS = 10
+SYNC_INTERVAL_SECONDS = 5
 REF_CODE_LENGTH = 6
 PIN_LENGTH = 4
 

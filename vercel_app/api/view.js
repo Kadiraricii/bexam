@@ -57,7 +57,9 @@ module.exports = async (req, res) => {
 
   const record = store.get(ref_code);
   if (!record) {
-    return res.status(404).json({ error: "Bu Referans Kodu ile yayınlanmış veri bulunamadı veya oturum kapandı." });
+    return res.status(404).json({
+      error: `Bu Referans Kodu (${ref_code}) ile henüz canlı yayın başlatılmamış. Masaüstü uygulamasındaki Ayarlar menüsünden "Bulut Yayını Başlat" butonuna tıkladığından emin ol.`
+    });
   }
 
   if (record.pin !== pin) {
