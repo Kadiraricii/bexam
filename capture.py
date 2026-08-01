@@ -89,11 +89,152 @@ FORCE_VISIBLE_CSS = """
 * {
     overflow: visible !important;
     max-height: none !important;
+    /* CANLI DOGRULANAN HATA: sol panel gizlenip fixed/sticky konumlandirma
+       static'e cevrildikten SONRA bile, PDF'in sonunda BOS sayfalar
+       kalmaya devam ediyordu. Sebep: Blackboard'un SPA'si tipik olarak
+       React'in kok konteynerine (ör. #root/App/MuiBox-root gibi bir
+       sarmalayici) `min-height: 100vh` (ya da benzeri, ekranin TAMAMINI
+       kaplamaya zorlayan bir yukseklik) veriyor. Bu, EKRANDA "footer'in
+       her zaman sayfanin altina yapismasi" gibi normal bir tasarim
+       amaci tasir, ama BASILI/statik bir PDF'te asil icerik bu 100vh'den
+       KISA kalinca, Chrome'un yazdirma motoru o fazladan (tamamen
+       gorsel olarak BOS) yuksekligi kapsamak icin ekstra sayfalar
+       ayiriyor. html/body'ye ozel yaptigimiz `min-height: 0` (asagida)
+       SADECE o iki elemani kapsiyordu - ARADAKI (bilinmeyen/isimsiz)
+       herhangi bir sarmalayici konteynerin KENDI min-height'ini
+       ETKILEMIYORDU. Bu yuzden artik `min-height: 0` TUM elemanlara
+       (`*`) uygulaniyor - bu, hicbir elemanin GERCEK icerik boyutundan
+       KUCUK gorunmesine yol acmaz (min-height sadece bir ALT SINIRDIR,
+       sifirlamak elemanlari kucultmez, sadece yapay/gereksiz fazladan
+       bosluğu kaldirir), bu yuzden risksiz bir genel duzeltmedir. */
+    min-height: 0 !important;
+    /* CANLI DOGRULANAN HATA: kullanicinin paylastigi PDF'lerde ayni sayi
+       dizisi ("60|80|50|...") HER SAYFANIN TEPESINDE birebir tekrarlaniyordu
+       - bu, Chrome'un yazdirma motorunun `position: fixed` olan elemanlari
+       HER SAYFADA yeniden basmasi olarak bilinen, cok yaygin bir davranis
+       (fixed elemanlar dokuman akisindan bagimsiz, viewport'a gore
+       konumlanir - coklu sayfali yazdirmada bu yuzden her sayfada "yeniden
+       cizilir"). Sol "Öğrenciler" paneli (ya da onu saran bir ust eleman)
+       byle bir fixed/sticky konumlandirma kullaniyor olabilir - hangi
+       spesifik eleman oldugunu bilmeye GEREK KALMADAN, TUM sayfadaki
+       fixed/sticky konumlandirmayi zorla `static`e ceviriyoruz. Bu, basili
+       bir PDF icin ZATEN doğru yaklasim - fixed/sticky sadece EKRANDA
+       kaydirirken sabit kalma amacli, basili/statik bir cikti icin hicbir
+       islevi yok, sadece yukaridaki tur bir tekrar riski tasiyor. */
+    position: static !important;
 }
 html, body {
     height: auto !important;
+    min-height: 0 !important;
+}
+/* CANLI DOGRULANAN HATA: Blackboard, ekran-okuyucu icin gorunmez
+   (sr-only / hideOffScreen) etiketlerini paylasilan CSS siniflariyla
+   gizliyor (ör. "Ana gönderim içeriği", "Soru 1", "Son Not: 50 puan
+   (100 puan üzerinden)" metinleri ve ogrenci listesindeki notlar).
+   Bu teknik genelde 1x1px + overflow:hidden ile calisir - yukaridaki
+   `* { overflow: visible !important }` kurali bunu da BOZUYOR: metin
+   artik "tasip" o 1x1px kutunun disina, sayfanin GORUNUR bir yerine
+   (sol ust, (0,0)) yayiliyor.
+   Kullanicinin paylastigi PDF ekran goruntusunde ("60|80|50|60|60|40|...")
+   tam olarak bu hata goruldu: Tum ogrencilerin gizli not etiketleri
+   sayfanin en üstünde üst üste basiliyordu.
+   Tüm ekran okuyucu siniflarini (hideOffScreen, sr-only, offScreen,
+   visuallyHidden vb.) ve bunlarin alt elemanlarini ACIKCA istisna
+   tutarak gizleme teknigini (overflow:hidden + clip) koruyoruz. */
+[class*="hideOffScreen"],
+[class*="sr-only"],
+[class*="srOnly"],
+[class*="offScreen"],
+[class*="offscreen"],
+[class*="visuallyHidden"],
+[class*="visually-hidden"],
+.sr-only,
+.hideOffScreen {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+[class*="hideOffScreen"] *,
+[class*="sr-only"] *,
+[class*="srOnly"] *,
+[class*="offScreen"] *,
+[class*="offscreen"] *,
+[class*="visuallyHidden"] *,
+[class*="visually-hidden"] *,
+.sr-only *,
+.hideOffScreen * {
+    overflow: hidden !important;
 }
 """
+
+# CANLI DOGRULANAN HATA: FORCE_VISIBLE_CSS `*` secicisiyle TUM sayfadaki
+# overflow/max-height'i acinca, sol "Öğrenciler" gezinme paneli (normalde
+# SABIT yukseklikte, kendi ic kaydirmasi olan bir liste) de KENDI TAM
+# ICERIK yuksekligine (ör. 15-30 ogrenci * satir yuksekligi) genisliyordu.
+# Bu panel, asil sinav icerigiyle YAN YANA (flex) bir sutun oldugu icin,
+# panel asil icerikten cok daha uzun oldugunda Chrome'un yazdirma motoru
+# bu fazladan (tamamen ALAKASIZ, gezinme amacli) yuksekligi kapsamak icin
+# ekstra sayfalar ayirıyordu - sonuc, PDF'in sonunda/arasinda icerigi
+# BOS gorunen sayfalar (kullanicinin bildirdigi tam olarak bu). Bu panel
+# zaten PDF'e GEREKMIYOR (ogrenci navigasyonu icin, sinav ICERIGI degil)
+# - bu yuzden yazdirmadan once TAMAMEN gizleniyor. Ayni gerekceyle,
+# sinavin kendisiyle ILGISIZ diger UI ogeleri (soru bazinda "Geri
+# Bildirim" ikonu, "... ile ilgili diğer seçenekler" acilir menuleri,
+# onceki/sonraki ogrenci gezinme oklari, arkaplan overlay/backdrop
+# elemanlari) da gizleniyor - hem gereksiz sayfa/bosluk riskini azaltiyor
+# hem de PDF'i sinavin GERCEK icerigine (sorular, cevaplar, ONAY/puan basligi)
+# indirgeyip daha temiz/profesyonel bir cikti veriyor.
+HIDE_NAVIGATION_CHROME_CSS = """
+[role="menu"][aria-label="Öğrenciler"],
+[role="menu"][aria-label*="Öğrenci"],
+[aria-label^="Geri Bildirim"],
+[aria-label$="ile ilgili diğer seçenekler"],
+[aria-label="Önceki Öğrenci"],
+[aria-label="Sonraki Öğrenci"],
+[data-analytics-id*="attemptGrading.header.studentPicker"],
+[class*="studentNav"],
+[class*="student-nav"],
+.snackbar-provider,
+.MuiDrawer-root,
+.MuiModal-root,
+.MuiPopover-root,
+.MuiDialog-root,
+.MuiBackdrop-root,
+[role="dialog"],
+[role="tooltip"],
+[class*="snackbar"],
+[class*="popover"],
+[class*="drawer"],
+[class*="backdrop"] {
+    display: none !important;
+}
+"""
+# UYARI: `[class*="hide-in-background"]` ve `[class*="has-footer"]`
+# BILEREK burada YOK - isimlerinin aksine bunlar cop degil, GERCEK
+# ICERIK uzerinde duran siniflar: "hide-in-background", Not Defteri/
+# Gönderimler panelinin ANA sarmalayicisinda (aktifken bile) goruluyor
+# ("panel-wrap hide-in-background grades", aria-hidden="false" ve
+# "active" ile birlikte); "has-footer" ise bir notlandirma satirinin
+# kaydet-alt-çubuğu durumunu belirten sıradan bir Angular ng-class
+# ifadesi. Şu an bu class'lar capture_current_page'in çalıştığı asıl
+# "Değerlendirme" sayfasında (flexible-attempt-grading) hiç görülmüyor
+# - ama isimleri yanıltıcı olduğu için buraya eklenirse ileride ASIL
+# İÇERİĞİ tamamen gizleme riski taşırlar. Eklemeyin.
+# UYARI: `.js-selectAttemptInputValueText` BILEREK burada YOK - o class
+# gezinme/UI cop'u DEGIL, "Gönderim tarihi: ..." metnini TASIYAN eleman
+# (bkz. kullanicinin paylastigi gercek DOM). Burada gizlenirse HEM PDF'te
+# gonderim tarihi tamamen kaybolur HEM DE extract_page_info'nun
+# gonderim_tarihi alani hep None doner (capture_current_page'deki
+# body_text = page.inner_text("body") bu CSS enjekte edildikten SONRA
+# calisiyor, display:none olan bir elemanin metni inner_text()'e hic
+# girmez). Bu class'i bu listeye EKLEMEYIN.
 
 AUTO_SCROLL_MAX_ITERATIONS = 120
 # Esik artik common.MIN_VALID_PDF_BYTES'ta yasiyor: ayni deger
@@ -179,6 +320,42 @@ async () => {
     return { total: imgs.length, pending, failed, waitedMs: waited };
 }
 """ % {"max_wait": IMAGE_LOAD_MAX_WAIT_MS, "poll": IMAGE_LOAD_POLL_MS}
+
+# PDF basimi tamamlandiktan VE gizlenen yan navigasyon/stiller
+# kaldirildiktan sonra, sayfayi VE tum kaydirilabilir alanlari tekrar en
+# uste (0, 0) kaydirir. Aksi halde sayfa en altta kalabiliyordu veya bir
+# panel kaydirilmis/takili kalabiliyordu; bu da hocanin ya da otomatik
+# taramanin sonraki ogrenciye gecmesini engelliyordu.
+#
+# CANLI DOGRULANAN HATA: bu sifirlama once TUM elemanlara
+# (`querySelectorAll('*')`) uygulaniyordu - bu, sol "Öğrenciler" gezinme
+# listesinin KENDI kaydirma konumunu da sifirliyordu. Sonuc: 18. ogrenci
+# yakalandiktan sonra panel BASTAN (1, 2, 3...) gorunmeye basliyor, 19.
+# ogrenciye ulasmak icin panel her seferinde yeniden asagi kaydirilmasi
+# gerekiyordu - hem gereksiz zaman kaybi hem de panel virtualized ise
+# (ekran disina cikan ogrencilerin DOM'dan dusurulmesi durumunda) 19.
+# ogrencinin sessizce BULUNAMAMA riski. Bu yuzden artik sol "Öğrenciler"
+# listesinin (ya da onun herhangi bir alt elemaninin) kaydirma konumuna
+# DOKUNULMUYOR - sadece geri kalan (asil sinav icerigi gibi) alanlar
+# sifirlaniyor.
+RESET_SCROLL_AFTER_CAPTURE_JS = """() => {
+    window.scrollTo(0, 0);
+    if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+    }
+    if (document.body) {
+        document.body.scrollTop = 0;
+    }
+    const scrollables = document.querySelectorAll('*');
+    for (const el of scrollables) {
+        if (el.scrollTop && el.scrollTop > 0) {
+            if (el.closest && el.closest('[role="menu"][aria-label*="Öğrenci"]')) {
+                continue;
+            }
+            el.scrollTop = 0;
+        }
+    }
+}"""
 
 
 def _iter_frames(page: Page):
@@ -291,6 +468,14 @@ def capture_current_page(
     switch_to_submission_tab(page)
 
     style_handle = page.add_style_tag(content=FORCE_VISIBLE_CSS)
+    # bkz. HIDE_NAVIGATION_CHROME_CSS docstring'i: sol "Öğrenciler" paneli
+    # ve diger sinav-disi UI ogeleri (geri bildirim/seçenekler butonlari,
+    # onceki/sonraki ogrenci oklari) yazdirmadan ONCE gizleniyor - hem
+    # gereksiz bos sayfa riskini azaltir hem PDF'i daha temiz/profesyonel
+    # hale getirir. AYRI bir style etiketi olarak tutuluyor ki asagidaki
+    # finally'de FORCE_VISIBLE_CSS'ten BAGIMSIZ, kendi basina guvenle
+    # kaldirilabilsin.
+    nav_style_handle = page.add_style_tag(content=HIDE_NAVIGATION_CHROME_CSS)
     try:
         scroll_results = scroll_all_frames(page)
         unstable = [r for r in scroll_results if not r["stabilized"]]
@@ -343,6 +528,25 @@ def capture_current_page(
             # belirleyici kisim) HER ZAMAN korunuyor, sadece basliktan kirpilir.
             pdf_path = ensure_safe_full_path(pdf_path, protect_suffix_chars=len(onay_part) + 1)
 
+        # Yazdirmadan hemen once, sayfa altinda bos/ekstra PDF sayfalari kalmasina
+        # neden olabilen sakli backdrop/overlay/drawer elemanlarini ve min-height'leri
+        # temizliyoruz.
+        try:
+            page.evaluate("""() => {
+                const overlays = document.querySelectorAll(
+                    '.MuiBackdrop-root, .MuiModal-root, .MuiPopover-root, .MuiDialog-root, [class*="backdrop"], [class*="overlay"]'
+                );
+                overlays.forEach(el => {
+                    if (!el.innerText || !el.innerText.trim()) {
+                        el.style.display = 'none';
+                        el.style.height = '0px';
+                        el.style.minHeight = '0px';
+                    }
+                });
+            }""")
+        except Exception:
+            pass
+
         try:
             page.pdf(path=str(pdf_path), format="A4", print_background=True)
         except OSError as exc:
@@ -361,6 +565,16 @@ def capture_current_page(
         except Exception:
             # Sayfa bu arada kapanmis/gecis yapmis olabilir - kaldirma
             # basarisiz olsa bile yakalama sonucunu etkilememeli.
+            pass
+        try:
+            nav_style_handle.evaluate("el => el.remove()")
+        except Exception:
+            # Ayni gerekce - bu kaldirma da BAGIMSIZ ve basarisizligi
+            # yakalama sonucunu etkilememeli.
+            pass
+        try:
+            page.evaluate(RESET_SCROLL_AFTER_CAPTURE_JS)
+        except Exception:
             pass
 
     pdf_size = pdf_path.stat().st_size

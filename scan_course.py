@@ -364,11 +364,26 @@ def _filter_submissions_to_submitted(page: Page) -> None:
     1. Once dropdown tetikleyicisinde zaten 'Gönderildi' yazip yazmadigi
        kontrol edilir. Zaten 'Gönderildi' ise menuye HIC TIKLANMAZ (filtre
        korunur, bozulmaz).
-    2. Menuyu actiktan ve 'Gönderildi' secildikten sonra, menunun ekranda
-       acik (overlay) kalip ogrenci satirina tiklamayi engellemesini/
-       filtreyi bozmasini onlemek icin Escape tusu firlatilir ve menunun
-       kapanmasi beklenir.
-    3. Tablonun filtresinin oturmasi icin kisa bekleme yapilir.
+    2. Menuyu actiktan ve 'Gönderildi' secildikten sonra, tetikleyicinin
+       GERCEKTEN 'Gönderildi' gostermeye basladigi dogrulanana kadar kisa
+       kisa beklenir (bkz. asagidaki IKINCI CANLI BUG notu - Escape
+       ARTIK KOSULSUZ basilmiyor).
+
+    IKINCI CANLI BUG (kullanicinin canli gozlemi - bu turun kendisi):
+    Onceki surumde secim yapildiktan HEMEN SONRA, "menu acik kalirsa
+    ogrenci satirina tiklamayi engeller" diye KOSULSUZ bir Escape tusu
+    basiliyordu. Gercekte MUI'nin Select bileseni bir secenege
+    TIKLANINCA menuyu zaten KENDISI kapatiyor - kosulsuz Escape, bu
+    secimin React/MUI tarafinda commit edilmesiyle YARISA giriyordu:
+    secim henuz tam islenmeden Escape araya girerse MUI bunu "vazgec"
+    olarak yorumlayip degeri ONCEKI durumuna ('Tüm Öğrenci Durumları')
+    GERI ALIYORDU - yani filtre once dogru uygulanip HEMEN ARDINDAN
+    eski haline donuyordu (kullanicinin bildirdigi tam olarak bu).
+    Duzeltme: Escape'i artik KOSULSUZ basmiyoruz - once tetikleyicinin
+    'Gönderildi' gostermeye basladigini bekleyip DOGRULUYORUZ, sadece
+    bu sure icinde HALA eski deger gorunuyorsa (secim gercekten commit
+    olmamis/menu hala takili kalmis olabilir) SON CARE olarak Escape
+    deniyoruz - boylece basarili bir secimi kendi elimizle bozmuyoruz.
     """
     trigger_loc = page.locator(f"#{STUDENT_STATUS_FILTER_TRIGGER_ID}")
     try:
@@ -426,6 +441,21 @@ def _filter_submissions_to_submitted(page: Page) -> None:
         except PlaywrightTimeoutError:
             pass
 
+    # bkz. yukaridaki "IKINCI CANLI BUG" notu: burada artik Escape'i
+    # KOSULSUZ basmiyoruz - once secimin gercekten commit olup
+    # olmadigini (tetikleyici metninde 'Gönderildi' gorunup gorunmedigini)
+    # kisa kisa kontrol ediyoruz. Commit olduysa hemen donuyoruz, Escape'e
+    # HIC GEREK YOK (MUI menuyu zaten kendisi kapatti).
+    for _ in range(6):
+        try:
+            if trigger_loc.count() > 0 and SUBMITTED_FILTER_OPTION in trigger_loc.inner_text():
+                return
+        except Exception:
+            break
+        page.wait_for_timeout(200)
+
+    # Bu noktaya geldiysek secim ya hic commit olmadi ya da menu hala
+    # takili/acik kaldi - SON CARE olarak Escape deneyip devam ediyoruz.
     try:
         page.keyboard.press("Escape")
     except Exception:

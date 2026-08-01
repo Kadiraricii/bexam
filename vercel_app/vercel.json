@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "routes": [
+    { "src": "/api/sync", "dest": "/api/sync.js" },
+    { "src": "/api/view", "dest": "/api/view.js" },
+    { "src": "/(.*)", "dest": "/public/$1" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "metib-cloud-dashboard",
+  "version": "2.0.0",
+  "description": "Blackboard Sınav Yakalayıcı - Vercel Bulut Görünüm Paneli",
+  "main": "api/sync.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {}
+}

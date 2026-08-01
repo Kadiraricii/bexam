@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BB Sınav Yakalayıcı - Bulut Canlı Görünüm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: rgba(30, 41, 59, 0.7);
+      --card-border: rgba(255, 255, 255, 0.1);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --warning-soft: rgba(245, 158, 11, 0.15);
+      --warning-text: #fef3c7;
+      --danger: #ef4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+      width: 100%;
+    }
+
+    /* Auth Screen */
+    .auth-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 80vh;
+    }
+
+    .auth-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 40px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+      text-align: center;
+    }
+
+    .auth-card h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .auth-card p {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 28px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+      text-align: left;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-control {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: #fff;
+      font-size: 16px;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .form-control:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+    }
+
+    .btn {
+      width: 100%;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 14px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn:hover { background: var(--primary-hover); }
+
+    .error-alert {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    /* Dashboard Header */
+    header {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--card-border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo-area { display: flex; align-items: center; gap: 12px; }
+    .logo-badge { background: var(--primary); color: #fff; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
+
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .live-dot { width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+
+    /* Summary Stats */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 20px;
+    }
+
+    .stat-val { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .stat-lbl { color: var(--muted); font-size: 13px; }
+
+    /* Courses & Cards */
+    .course-title { font-size: 20px; font-weight: 700; margin: 32px 0 16px 0; }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 20px;
+    }
+
+    .exam-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 20px;
+    }
+
+    .exam-head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+    .ring-canvas { width: 56px; height: 56px; }
+
+    .exam-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .exam-status { font-size: 13px; font-weight: 600; }
+    .exam-status.ok { color: var(--success); }
+    .exam-status.warn { color: var(--warning); }
+
+    .chips-area { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .chip {
+      background: var(--warning-soft);
+      color: var(--warning-text);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .chip-more {
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      cursor: pointer;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .modal-backdrop.active { opacity: 1; pointer-events: auto; }
+
+    .modal-box {
+      background: #1e293b;
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-head { padding: 20px; border-bottom: 1px solid var(--card-border); }
+    .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+    .modal-foot { padding: 16px 20px; border-top: 1px solid var(--card-border); display: flex; justify-content: space-between; }
+
+    .missing-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Auth Screen -->
+  <div id="auth-screen" class="auth-wrapper">
+    <div class="auth-card">
+      <div style="font-size: 40px; margin-bottom: 12px;">🌐</div>
+      <h1>BB Bulut Görünüm</h1>
+      <p>Masaüstü uygulamasında üretilen Referans Kodu ve PIN ile giriş yapın.</p>
+      
+      <div id="auth-error" class="error-alert"></div>
+
+      <div class="form-group">
+        <label>Referans Kodu</label>
+        <input id="inp-ref" type="text" class="form-control" placeholder="Örn: REF-8492" autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label>PIN Kodu</label>
+        <input id="inp-pin" type="password" maxlength="6" class="form-control" placeholder="Örn: 4829" />
+      </div>
+
+      <button id="btn-login" class="btn" onclick="doLogin()">Verileri Canlı Göster</button>
+    </div>
+  </div>
+
+  <!-- Dashboard Screen -->
+  <div id="dash-screen" style="display: none;">
+    <header>
+      <div class="logo-area">
+        <span class="logo-badge">VERCEL CLOUD</span>
+        <strong id="header-ref">REF-XXXX</strong>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <span class="live-badge"><span class="live-dot"></span> Canlı Senkronize</span>
+        <button class="btn" style="padding: 6px 14px; font-size: 13px; width: auto;" onclick="logout()">Çıkış</button>
+      </div>
+    </header>
+
+    <div class="container">
+      <div id="summary-area" class="summary-grid"></div>
+      <div id="courses-area"></div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 id="modal-title">Eksik Öğrenciler</h3>
+        <p id="modal-sub" style="color: var(--muted); font-size: 13px; margin-top: 4px;"></p>
+      </div>
+      <div id="modal-list" class="modal-body"></div>
+      <div class="modal-foot">
+        <button class="btn" style="width: auto; padding: 8px 16px; font-size: 13px; background: rgba(255,255,255,0.1);" onclick="copyModalList()">Listeyi Kopyala</button>
+        <button class="btn" style="width: auto; padding: 8px 16px; font-size: 13px;" onclick="closeModal()">Kapat</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeRef = localStorage.getItem('bb_ref') || '';
+    let activePin = localStorage.getItem('bb_pin') || '';
+    let refreshTimer = null;
+    let currentModalMissing = [];
+    let currentModalExam = '';
+
+    if (activeRef && activePin) {
+      document.getElementById('inp-ref').value = activeRef;
+      document.getElementById('inp-pin').value = activePin;
+      doLogin();
+    }
+
+    async function doLogin() {
+      const ref = document.getElementById('inp-ref').value.trim().toUpperCase();
+      const pin = document.getElementById('inp-pin').value.trim();
+      const errEl = document.getElementById('auth-error');
+      errEl.style.display = 'none';
+
+      if (!ref || !pin) {
+        errEl.innerText = 'Lütfen Referans Kodu ve PIN girin.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/api/view?ref_code=${encodeURIComponent(ref)}&pin=${encodeURIComponent(pin)}`);
+        const json = await resp.json();
+        if (!resp.ok || !json.success) {
+          throw new Error(json.error || 'Giriş başarısız.');
+        }
+
+        activeRef = ref;
+        activePin = pin;
+        localStorage.setItem('bb_ref', ref);
+        localStorage.setItem('bb_pin', pin);
+
+        document.getElementById('auth-screen').style.display = 'none';
+        document.getElementById('dash-screen').style.display = 'block';
+        document.getElementById('header-ref').innerText = ref;
+
+        renderData(json.data);
+        startAutoRefresh();
+      } catch (err) {
+        errEl.innerText = err.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('bb_ref');
+      localStorage.removeItem('bb_pin');
+      clearInterval(refreshTimer);
+      document.getElementById('dash-screen').style.display = 'none';
+      document.getElementById('auth-screen').style.display = 'flex';
+    }
+
+    function startAutoRefresh() {
+      clearInterval(refreshTimer);
+      refreshTimer = setInterval(async () => {
+        if (!activeRef || !activePin) return;
+        try {
+          const resp = await fetch(`/api/view?ref_code=${encodeURIComponent(activeRef)}&pin=${encodeURIComponent(activePin)}`);
+          const json = await resp.json();
+          if (resp.ok && json.success) {
+            renderData(json.data);
+          }
+        } catch (e) {}
+      }, 5000);
+    }
+
+    function renderData(data) {
+      if (!data) return;
+
+      // Summary
+      const summary = data.summary;
+      const sumArea = document.getElementById('summary-area');
+      sumArea.innerHTML = '';
+
+      if (summary) {
+        sumArea.innerHTML = `
+          <div class="stat-card">
+            <div class="stat-val">${summary.total_exams}</div>
+            <div class="stat-lbl">Toplam Sınav Klasörü</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-val">${summary.captured_sum}/${summary.roster_total_sum}</div>
+            <div class="stat-lbl">Toplam Yakalanan PDF</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-val" style="color: ${summary.exams_with_missing ? 'var(--warning)' : 'var(--success)'}">
+              ${summary.exams_with_missing}
+            </div>
+            <div class="stat-lbl">Eksik Olan Sınav Sayısı</div>
+          </div>
+        `;
+      }
+
+      // Courses & Exams
+      const cArea = document.getElementById('courses-area');
+      cArea.innerHTML = '';
+
+      (data.courses || []).forEach(course => {
+        const cDiv = document.createElement('div');
+        cDiv.innerHTML = `<h2 class="course-title">📁 ${course.name}</h2>`;
+        
+        const grid = document.createElement('div');
+        grid.className = 'card-grid';
+
+        course.exams.forEach(exam => {
+          const card = document.createElement('div');
+          card.className = 'exam-card';
+          
+          let statusText = `${exam.item_count} öğe`;
+          let statusClass = '';
+          let missingChipsHtml = '';
+
+          if (exam.total !== null) {
+            const isComplete = exam.captured >= exam.total;
+            statusText = isComplete ? 'Tamamlandı' : `${(exam.missing || []).length} öğrenci eksik`;
+            statusClass = isComplete ? 'ok' : 'warn';
+
+            if (exam.missing && exam.missing.length > 0) {
+              const shown = exam.missing.slice(0, 4);
+              const remaining = exam.missing.length - shown.length;
+              
+              let chips = shown.map(s => `<span class="chip">⚠ ${s.name}</span>`).join('');
+              if (remaining > 0) {
+                chips += `<span class="chip chip-more" onclick='openModal(${JSON.stringify(exam.name)}, ${JSON.stringify(exam.missing)})'>+${remaining} daha (Tümünü Gör)</span>`;
+              }
+              missingChipsHtml = `<div class="chips-area">${chips}</div>`;
+            }
+          }
+
+          const pct = exam.total ? (exam.captured / exam.total) : 1;
+          const strokeColor = (exam.captured >= exam.total) ? '#22c55e' : '#f59e0b';
+
+          card.innerHTML = `
+            <div class="exam-head">
+              <svg class="ring-canvas" viewBox="0 0 36 36">
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3" />
+                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${strokeColor}" stroke-width="3" stroke-dasharray="${pct * 100}, 100" />
+                <text x="18" y="20.35" text-anchor="middle" fill="#fff" font-size="9" font-weight="700">${exam.captured || 0}/${exam.total || 0}</text>
+              </svg>
+              <div>
+                <div class="exam-name">${exam.name}</div>
+                <div class="exam-status ${statusClass}">${statusText}</div>
+              </div>
+            </div>
+            ${missingChipsHtml}
+          `;
+          grid.appendChild(card);
+        });
+
+        cDiv.appendChild(grid);
+        cArea.appendChild(cDiv);
+      });
+    }
+
+    function openModal(examName, missing) {
+      currentModalExam = examName;
+      currentModalMissing = missing || [];
+      document.getElementById('modal-title').innerText = `📁 ${examName}`;
+      document.getElementById('modal-sub').innerText = `Bu sınavda toplam ${missing.length} öğrencinin PDF'i eksik.`;
+      
+      const listEl = document.getElementById('modal-list');
+      listEl.innerHTML = missing.map((s, i) => `
+        <div class="missing-item">
+          <span><strong>${i+1}.</strong> ⚠ ${s.name}</span>
+          <span style="color: var(--muted);">${s.no}</span>
+        </div>
+      `).join('');
+
+      document.getElementById('modal').classList.add('active');
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('active');
+    }
+
+    function copyModalList() {
+      const text = `${currentModalExam} Eksik Listesi:\n` + currentModalMissing.map(s => `${s.name} (${s.no})`).join('\n');
+      navigator.clipboard.writeText(text);
+      alert('Eksik listesi panoya kopyalandı.');
+    }
+  </script>
+</body>
+</html>

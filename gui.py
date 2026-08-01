@@ -94,6 +94,7 @@ from scan_grade_center import (
     find_student_rows,
 )
 from scan_students import find_student_roster, write_student_roster_csv
+from cloud_sync import CloudSyncManager
 from web_view import AUTO_REFRESH_SECONDS, WebViewServer
 
 # ---------- gorsel dil (renk/tipografi) ----------
@@ -718,6 +719,7 @@ class BlackboardGUI:
         # thread'i, bkz. web_view.py), o yuzden kendi bayragina/nesnesine
         # ihtiyaci var. None = hic baslatilmadi/durduruldu.
         self._web_view_server: WebViewServer | None = None
+        self._cloud_sync_manager: CloudSyncManager | None = None
         # Indirme sayfasindaki kart izgarasinin sutun sayisi - pencere
         # genisligine gore CANLI olarak yeniden hesaplanir (bkz.
         # _on_download_body_configure) ki pencere kucultulunce kartlar
@@ -1905,6 +1907,9 @@ class BlackboardGUI:
         head = tk.Frame(inner, bg=COLOR_CARD)
         head.pack(fill="x")
 
+        sub_lbl = None
+        more_btn = None
+
         if completion is not None:
             total, missing = completion
             captured = total - len(missing)
@@ -1918,9 +1923,10 @@ class BlackboardGUI:
             ).pack(fill="x")
             sub_text = "tamamlandı" if not missing else f"{len(missing)} öğrenci eksik"
             sub_color = COLOR_SUCCESS if not missing else COLOR_WARNING
-            tk.Label(
+            sub_lbl = tk.Label(
                 text_col, text=sub_text, bg=COLOR_CARD, fg=sub_color, font=FONT_MUTED, anchor="w",
-            ).pack(fill="x")
+            )
+            sub_lbl.pack(fill="x")
             if missing:
                 chip_row = tk.Frame(inner, bg=COLOR_CARD)
                 chip_row.pack(fill="x", pady=(10, 0))
@@ -1932,9 +1938,12 @@ class BlackboardGUI:
                     ).pack(side="left", padx=(0, 6), pady=2)
                 remaining = len(missing) - len(shown)
                 if remaining > 0:
-                    tk.Label(
-                        chip_row, text=f"+{remaining} daha", bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 11),
-                    ).pack(side="left", padx=(2, 0))
+                    more_btn = tk.Label(
+                        chip_row, text=f"+{remaining} daha (Tümünü Gör)",
+                        bg=COLOR_ACCENT_SOFT, fg=COLOR_ACCENT, font=("", 11, "bold"),
+                        padx=8, pady=3,
+                    )
+                    more_btn.pack(side="left", padx=(2, 0))
         else:
             tk.Label(head, text="📁", bg=COLOR_CARD, font=_emoji_font(26)).pack(side="left")
             text_col = tk.Frame(head, bg=COLOR_CARD)
@@ -1950,7 +1959,142 @@ class BlackboardGUI:
             ).pack(fill="x")
 
         self._bind_click_recursive(card, lambda _e=None, d=exam_dir: self._on_exam_card_click(d))
+
+        if completion is not None and completion[1]:
+            missing_list = completion[1]
+            if sub_lbl is not None:
+                sub_lbl.configure(cursor=CURSOR_HAND)
+                sub_lbl.bind(
+                    "<Button-1>",
+                    lambda _e, d=exam_dir.name, m=missing_list: self._show_missing_students_dialog(d, m),
+                )
+            if more_btn is not None:
+                more_btn.configure(cursor=CURSOR_HAND)
+                more_btn.bind(
+                    "<Button-1>",
+                    lambda _e, d=exam_dir.name, m=missing_list: self._show_missing_students_dialog(d, m),
+                )
+
         return card
+
+    def _show_missing_students_dialog(self, exam_name: str, missing: list[tuple[str, str]]) -> None:
+        """Indirme sayfasinda eksik ogrencisi olan bir sinav kartina veya
+        '+N daha' rozetine tiklandiginda acilan modal pencere: eksik olan
+        TUM ogrencileri ad ve numaralariyla kaydirilabilir bir listede gosterir,
+        arama yapma ve listeyi panoya kopyalama imkani sunar."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Eksik Öğrenciler - {exam_name}")
+        dialog.geometry("520x560")
+        dialog.configure(bg=COLOR_BG)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        rx = self.root.winfo_x()
+        ry = self.root.winfo_y()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+        dialog.geometry(f"+{rx + max(0, (rw - 520) // 2)}+{ry + max(0, (rh - 560) // 2)}")
+
+        head = tk.Frame(dialog, bg=COLOR_CARD, padx=20, pady=16)
+        head.pack(fill="x")
+        tk.Label(
+            head, text=f"📁 {exam_name}", bg=COLOR_CARD, fg=COLOR_TEXT, font=("", 16, "bold"), anchor="w"
+        ).pack(fill="x")
+        tk.Label(
+            head, text=f"Bu sınavda toplam {len(missing)} öğrencinin PDF'i eksik.",
+            bg=COLOR_CARD, fg=COLOR_WARNING, font=("", 12), anchor="w"
+        ).pack(fill="x", pady=(4, 0))
+
+        search_frame = tk.Frame(dialog, bg=COLOR_BG, padx=20, pady=12)
+        search_frame.pack(fill="x")
+        tk.Label(search_frame, text="🔍", bg=COLOR_BG, font=_emoji_font(14)).pack(side="left", padx=(0, 6))
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(
+            search_frame, textvariable=search_var, font=("", 12),
+            bg=COLOR_CARD, fg=COLOR_TEXT, insertbackground=COLOR_TEXT,
+            highlightbackground=COLOR_BORDER, highlightthickness=1, bd=0
+        )
+        search_entry.pack(side="left", fill="x", expand=True, ipady=6)
+
+        list_container = tk.Frame(dialog, bg=COLOR_BG, padx=20, pady=0)
+        list_container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(list_container, bg=COLOR_BG, highlightthickness=0)
+        scrollbar = tk.Scrollbar(list_container, orient="vertical", command=canvas.yview)
+        scroll_content = tk.Frame(canvas, bg=COLOR_BG)
+
+        scroll_content.bind(
+            "<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas_window = canvas.create_window((0, 0), window=scroll_content, anchor="nw")
+        canvas.bind(
+            "<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width)
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def populate_list(filter_text: str = "") -> None:
+            for child in scroll_content.winfo_children():
+                child.destroy()
+
+            f_lower = filter_text.strip().lower()
+            filtered = [
+                (name, no) for name, no in missing
+                if not f_lower or f_lower in name.lower() or f_lower in no.lower()
+            ]
+
+            if not filtered:
+                tk.Label(
+                    scroll_content, text="Aramaya uygun eksik öğrenci bulunamadı.",
+                    bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_MUTED, pady=20
+                ).pack(fill="x")
+                return
+
+            for idx, (display_name, student_no) in enumerate(filtered):
+                row = tk.Frame(
+                    scroll_content, bg=COLOR_CARD,
+                    highlightbackground=COLOR_BORDER, highlightthickness=1
+                )
+                row.pack(fill="x", pady=4, ipady=6, ipadx=10)
+                tk.Label(
+                    row, text=f"{idx+1}.", bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 11, "bold"), width=3
+                ).pack(side="left")
+                tk.Label(
+                    row, text=f"⚠  {display_name}", bg=COLOR_CARD, fg=COLOR_TEXT, font=("", 12, "bold"), anchor="w"
+                ).pack(side="left", fill="x", expand=True)
+                tk.Label(
+                    row, text=student_no, bg=COLOR_CARD, fg=COLOR_MUTED, font=("", 11)
+                ).pack(side="right", padx=(10, 6))
+
+        populate_list()
+        search_var.trace_add("write", lambda *_: populate_list(search_var.get()))
+
+        footer = tk.Frame(dialog, bg=COLOR_CARD, padx=20, pady=12)
+        footer.pack(fill="x")
+
+        def copy_list() -> None:
+            lines = [f"{name} ({no})" for name, no in missing]
+            text = f"{exam_name} Eksik Öğrenci Listesi ({len(missing)} kişi):\n" + "\n".join(lines)
+            dialog.clipboard_clear()
+            dialog.clipboard_append(text)
+            messagebox.showinfo("Kopyalandı", f"{len(missing)} eksik öğrencinin listesi panoya kopyalandı.", parent=dialog)
+
+        copy_btn = tk.Button(
+            footer, text="📋 Listeyi Kopyala", command=copy_list,
+            bg=COLOR_ACCENT_SOFT, fg=COLOR_ACCENT, font=("", 11, "bold"),
+            bd=0, padx=12, pady=6, cursor=CURSOR_HAND
+        )
+        copy_btn.pack(side="left")
+
+        close_btn = tk.Button(
+            footer, text="Kapat", command=dialog.destroy,
+            bg=COLOR_ACCENT, fg="#FFFFFF", font=("", 11, "bold"),
+            bd=0, padx=16, pady=6, cursor=CURSOR_HAND
+        )
+        close_btn.pack(side="right")
 
     def _draw_completion_ring(self, parent: tk.Widget, captured: int, total: int) -> tk.Canvas:
         """0-1 arasi tamamlanma oranini bir 'donut' halka olarak cizer -
@@ -2136,6 +2280,65 @@ class BlackboardGUI:
         ).pack(side="left")
 
         self._build_web_view_card(wrapper)
+        self._build_cloud_sync_card(wrapper)
+
+    def _build_cloud_sync_card(self, wrapper: tk.Widget) -> None:
+        """Ayarlar sayfasindaki 'Vercel Bulut Gorunumu' karti: Indirme durumunu
+        Referans Kodu ve PIN kodu ile Vercel uzerinde yayinlanan bulut sitesine
+        senkronize eder."""
+        card = self._make_card(wrapper)
+        card.pack(fill="x", pady=(16, 0))
+        tk.Label(
+            card.inner, text="☁️  Vercel Bulut Canlı Yayın Paneli (Referans Kodu + PIN)",
+            bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_SECTION,
+        ).pack(anchor="w", pady=(0, 8))
+        tk.Label(
+            card.inner,
+            text="Localhost yerine internet üzerindeki Vercel sitesinde sınav durumunu "
+            "canlı izlemeyi sağlar. Herhangi bir bilgisayardan veya mobil cihazdan "
+            "Vercel sitesine girip Referans Kodu ve PIN kodunu yazarak durumu canlı izleyebilirsiniz.",
+            bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
+            justify="left", wraplength=680,
+        ).pack(fill="x", pady=(0, 12))
+
+        manager = self._cloud_sync_manager
+        is_running = manager is not None and manager.is_running
+        if is_running and manager is not None:
+            info_box = tk.Frame(
+                card.inner, bg="#fbfcfe", highlightbackground=COLOR_BORDER, highlightthickness=1,
+            )
+            info_box.pack(fill="x", pady=(0, 10))
+            info_inner = tk.Frame(info_box, bg="#fbfcfe")
+            info_inner.pack(fill="x", padx=14, pady=12)
+
+            self._build_copy_row(info_inner, "Vercel", manager.vercel_url)
+            self._build_copy_row(info_inner, "Ref Kodu", manager.ref_code, pady_top=10)
+            self._build_copy_row(info_inner, "PIN", manager.pin, pady_top=10)
+
+            status_text = "🟢 Canlı Yayın Aktif"
+            if manager.last_sync_time:
+                sync_str = time.strftime("%H:%M:%S", time.localtime(manager.last_sync_time))
+                status_text += f" (Son Senkronizasyon: {sync_str})"
+
+            tk.Label(
+                card.inner, text=status_text, bg=COLOR_CARD, fg=COLOR_SUCCESS, font=("", 11, "bold"), anchor="w",
+            ).pack(fill="x", pady=(0, 12))
+
+            btn_row = tk.Frame(card.inner, bg=COLOR_CARD)
+            btn_row.pack(fill="x")
+            RoundedButton(
+                btn_row, text="Yayını Durdur", command=self._toggle_cloud_sync,
+                kind="danger", width=140,
+            ).pack(side="left", padx=(0, 10))
+            RoundedButton(
+                btn_row, text="Yeni Kod Üret", command=self._regen_cloud_credentials,
+                kind="secondary", width=140,
+            ).pack(side="left")
+        else:
+            RoundedButton(
+                card.inner, text="Bulut Yayını Başlat", command=self._toggle_cloud_sync,
+                kind="primary", width=160,
+            ).pack(anchor="w")
 
     def _build_web_view_card(self, wrapper: tk.Widget) -> None:
         """Ayarlar sayfasindaki 'Web Görünümü' karti: Indirme sayfasindaki
@@ -2277,6 +2480,35 @@ class BlackboardGUI:
         # guncelleme mekanizmasi yok (Ana Sayfa'nin aksine), tam yeniden
         # kurmak en basit dogru cozum.
         self._show_page("settings")
+
+    def _toggle_cloud_sync(self) -> None:
+        if self._cloud_sync_manager is not None and self._cloud_sync_manager.is_running:
+            self._cloud_sync_manager.stop()
+            self._cloud_sync_manager = None
+            messagebox.showinfo("Bulut Yayın Durduruldu", "Vercel bulut senkronizasyonu durduruldu.")
+        else:
+            self._cloud_sync_manager = CloudSyncManager(self.output_dir)
+            self._cloud_sync_manager.start()
+            messagebox.showinfo(
+                "Bulut Yayın Başlatıldı",
+                f"Vercel Bulut Senkronizasyonu Başlatıldı!\n\n"
+                f"Vercel Adresi: {self._cloud_sync_manager.vercel_url}\n"
+                f"Referans Kodu: {self._cloud_sync_manager.ref_code}\n"
+                f"PIN Kodu: {self._cloud_sync_manager.pin}\n\n"
+                f"Vercel sitesine bu Referans Kodu ve PIN ile giriş yaparak "
+                f"durumu canlı takip edebilirsiniz."
+            )
+        self._show_page("settings")
+
+    def _regen_cloud_credentials(self) -> None:
+        if self._cloud_sync_manager is not None:
+            ref, pin = self._cloud_sync_manager.regenerate_credentials()
+            self._cloud_sync_manager.sync_once()
+            messagebox.showinfo(
+                "Yeni KOD Üretildi",
+                f"Yeni Referans Kodu: {ref}\nYeni PIN Kodu: {pin}"
+            )
+            self._show_page("settings")
 
     def _build_help_page(self, parent: tk.Widget) -> None:
         # Bu sayfa artik 5 adim + "Öğrenci Tara" detay karti + Chrome
@@ -3488,6 +3720,9 @@ class BlackboardGUI:
         if self._web_view_server is not None:
             self._web_view_server.stop()
             self._web_view_server = None
+        if self._cloud_sync_manager is not None:
+            self._cloud_sync_manager.stop()
+            self._cloud_sync_manager = None
 
         exit_button = getattr(self, "safe_exit_button", None)
         if exit_button is not None:

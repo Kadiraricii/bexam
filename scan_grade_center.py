@@ -100,6 +100,43 @@ SYSTEM_EXCLUDE_KEYWORDS = {
     "kapat",
 }
 
+# CANLI DOGRULANAN gercek DOM (kullanicinin paylastigi HTML): sol
+# ogrenci paneli role="menu" + aria-label="Öğrenciler" olan bir <ul>.
+# Bu, ESKI genel PANEL_FALLBACK_SELECTOR'DAN ONCE denenir - cunku bu
+# sayfa turunde ('flexible-attempt-grading-panel' class'i YOK,
+# data-page-title'da 'Not Verme' de gecmiyor) eski selector HER ZAMAN
+# 0 sonuc verip panel'in SESSIZCE TUM SAYFAYA (page) genislemesine yol
+# aciyordu. Bunun SOMUT sonucu: ogrencinin ADI sayfada BIRDEN FAZLA
+# yerde geciyor (ör. sayfa USTUNDEKI kompakt basliktaki isim VE sol
+# paneldeki liste satirindaki isim AYNI metni tasiyor) - panel=page
+# iken find_scroll_container'in `get_by_text(...).first`'i SAYFADAKI
+# ILK eslesmeyi (kompakt basliktaki isim - kaydirilamaz, sabit bir alan)
+# secebiliyordu. Oradan yukari kaydirilabilir bir ata ARANINCA hicbir
+# zaman bulunamiyor, find_scroll_container Python `None` DEGIL, JS
+# 'null' deger SARAN bir JSHandle donduruyordu (bkz. find_student_rows
+# icindeki json_value() kontrolu) - collect_visible_rows_in_container
+# bu null uzerinde querySelectorAll cagirinca "Cannot read properties
+# of null" hatasiyla PATLIYORDU (CANLI DOGRULANAN cokme). Panel'i bu
+# DAR, dogru selector'la sinirlamak hem bu cakismayi onluyor hem de
+# kaydirmanin GERCEKTEN dogru konteynerden baslamasini sagliyor.
+STUDENT_LIST_PANEL_SELECTOR = '[role="menu"][aria-label="Öğrenciler"]'
+PANEL_FALLBACK_SELECTOR = ".flexible-attempt-grading-panel, [data-page-title*='Not Verme']"
+
+
+def _resolve_student_panel(page: Page):
+    """collect_visible_rows/find_scroll_container/capture_student'in
+    UCUNUN de paylastigi panel-bulma mantigi - bkz.
+    STUDENT_LIST_PANEL_SELECTOR docstring'i. Once EN DAR/dogrulanmis
+    selector'i, sonra eski genel fallback'i, o da bulunamazsa TUM
+    sayfayi (page) dener."""
+    panel = page.locator(STUDENT_LIST_PANEL_SELECTOR).first
+    if panel.count() > 0:
+        return panel
+    panel = page.locator(PANEL_FALLBACK_SELECTOR).first
+    if panel.count() > 0:
+        return panel
+    return page
+
 
 def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
     """Gorunen her ogrenci satirindan (ad, not) cifti toplar.
@@ -107,10 +144,17 @@ def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
     Not, sidebar'daki skor rozetinden (ör. '50 / 100') alinir - bu,
     daha sonra tiklanan sayfadaki notla karsilastirilarak dogru
     ogrenciye tiklandigini teyit etmek icin kullanilir.
-    """
-    panel = page.locator(".flexible-attempt-grading-panel, [data-page-title*='Not Verme']").first
-    if panel.count() == 0:
-        panel = page
+
+    CANLI DOGRULANAN HATA: kullanicinin paylastigi gercek DOM'da (bkz.
+    proje gecmisi) ogrenci satirlari `role="menuitem"` olan `<li>`
+    elemanlari - isim VE puan bu `<li>`'nin ICINDE farkli alt div'lere
+    bolunmus durumda (isim iceren `userCardWrapper` div'inin KENDISINDE
+    puan YOK, puan ayri bir kardes div'de). Asagidaki selector listesinde
+    `[role="menuitem"]` OLMADAN once, isim+puani BIRLIKTE tasiyan tek
+    eleman (bu `<li>`) hicbir selector'a uymuyordu - sonuc: bu sayfada
+    HER ZAMAN '0 öğrenci satırı bulundu' (tarama sessizce hicbir sey
+    yakalamiyordu, hata bile vermiyordu)."""
+    panel = _resolve_student_panel(page)
 
     selectors = [
         '[class*="cardWrapper"]',
@@ -121,6 +165,7 @@ def collect_visible_rows(page: Page) -> list[tuple[str, str]]:
         '[role="option"]',
         '[role="listitem"]',
         '[role="treeitem"]',
+        '[role="menuitem"]',
     ]
     candidates = panel.locator(", ".join(selectors)).filter(has_text=STUDENT_ROW_SCORE_PATTERN)
     rows: list[tuple[str, str]] = []
@@ -163,11 +208,30 @@ def collect_visible_rows_in_container(scroll_handle) -> list[tuple[str, str]]:
     """scroll_handle (bulunan kaydirma konteyneri) icindeki TUM satir
     butonlarini toplar - collect_visible_rows'un aksine sayisal not
     ZORUNLU DEGIL.
-    """
+
+    CANLI DOGRULANAN HATA: kullanicinin paylastigi gercek DOM'da her
+    ogrenci satiri icin ASAGIDAKI selector listesi IKI AYRI eleman
+    eslestiriyor - disaridaki `[role="menuitem"]` olan `<li>` (isim +
+    puan) VE onun ICINDEKI, isim iceren "userCardWrapper" benzeri bir
+    div (`[class*="userCard"]` ile eslesen, ama puan TASIMAYAN - puan
+    ayri bir kardes div'de). collect_visible_rows'un aksine burada puan
+    sarti ARANMADIGI icin (kasitli - notu olmayan ogrencileri de
+    yakalamak icin, bkz. yukaridaki docstring) ic-ice bu iki eslesme
+    AYRI AYRI satir sayiliyordu - HER ogrenci TAM 2 KEZ (aynen ayni ONAY
+    koduyla) yakalanip PDF'i 2 kez uretiliyordu (CANLI DOGRULANDI: 15
+    gercek ogrenci yerine '30 öğrenci satırı bulundu', her isim aynen
+    '(2)' kopyasiyla ayni ONAY kodunu veriyordu).
+
+    Cozum: sonuc kumesinde birbirini ICEREN (biri digerinin DOM atasi
+    olan) eslesmeler varsa sadece EN DISTAKI (en genis) olani tutuyoruz -
+    "topLevel" filtresi. Boylece rol/class fark etmeksizin, HANGI iki
+    selector cakisirsa cakissin, ayni gorsel satir ARTIK SADECE BIR KEZ
+    sayiliyor."""
     raw_texts = scroll_handle.evaluate(
         """el => {
-            const buttons = Array.from(el.querySelectorAll('[class*="cardWrapper"], [class*="CardWrapper"], [class*="userCard"], [role="button"], button, [role="option"], [role="listitem"]'));
-            return buttons.map((b) => (b.innerText || '').trim()).filter(Boolean);
+            const all = Array.from(el.querySelectorAll('[class*="cardWrapper"], [class*="CardWrapper"], [class*="userCard"], [role="button"], button, [role="option"], [role="listitem"], [role="menuitem"]'));
+            const topLevel = all.filter(node => !all.some(other => other !== node && other.contains(node)));
+            return topLevel.map((b) => (b.innerText || '').trim()).filter(Boolean);
         }"""
     )
     rows: list[tuple[str, str]] = []
@@ -189,9 +253,7 @@ def collect_visible_rows_in_container(scroll_handle) -> list[tuple[str, str]]:
 
 def find_scroll_container(page: Page, anchor_text: str):
     """Verilen ogrenci satirindan yukari dogru en yakin kaydirilabilir atayi bulur."""
-    panel = page.locator(".flexible-attempt-grading-panel, [data-page-title*='Not Verme']").first
-    if panel.count() == 0:
-        panel = page
+    panel = _resolve_student_panel(page)
 
     anchor = panel.get_by_text(anchor_text, exact=True).first
     if anchor.count() == 0:
@@ -232,13 +294,28 @@ def find_student_rows(page: Page) -> list[tuple[str, str]]:
     collect_visible_rows_in_container ile yapilir - bu, notu olmayan/
     henuz notlandirilmamis ogrencileri de yakalar (bkz. o fonksiyonun
     docstring'i).
-    """
+
+    CANLI DOGRULANAN COKME: find_scroll_container hicbir kaydirilabilir
+    ata bulamazsa Python `None` DEGIL, JS `null` degerini SARAN bir
+    JSHandle donduruyor (`evaluate_handle` HER ZAMAN bir JSHandle
+    dondurur, alttaki deger null olsa bile) - `scroll_handle is None`
+    kontrolu bunu YAKALAYAMIYORDU, sonrasinda collect_visible_rows_in_
+    container bu null'un uzerinde `querySelectorAll` cagirinca "Cannot
+    read properties of null" ile PATLIYORDU. `json_value()` ile alttaki
+    GERCEK JS degerini kontrol ediyoruz - `null` ise Python `None`
+    doner, boylece bu durumu da guvenle yakalayip (kaydirmadan vazgecip)
+    en azindan o ana kadar GORUNEN satirlarla devam ediyoruz."""
     rows = collect_visible_rows(page)
     if not rows:
         return rows
 
     scroll_handle = find_scroll_container(page, rows[0][0])
     if scroll_handle is None:
+        return rows
+    try:
+        if scroll_handle.json_value() is None:
+            return rows
+    except Exception:
         return rows
 
     seen_order: list[tuple[str, str]] = list(collect_visible_rows_in_container(scroll_handle))
@@ -346,9 +423,7 @@ def capture_student(
     # sekilde farkliysa (0 eslesme) eski substring davranisina duseriz -
     # yanlis-pozitif riskine ragmen hic tiklayamamaktan iyi, cunku asil
     # guvence zaten tiklama SONRASI icerik dogrulamasi (ONAY + isim + not).
-    panel = page.locator(".flexible-attempt-grading-panel, [data-page-title*='Not Verme']").first
-    if panel.count() == 0:
-        panel = page
+    panel = _resolve_student_panel(page)
 
     selectors = [
         '[class*="cardWrapper"]',
@@ -359,6 +434,7 @@ def capture_student(
         '[role="option"]',
         '[role="listitem"]',
         '[role="treeitem"]',
+        '[role="menuitem"]',
     ]
     rows = panel.locator(", ".join(selectors)).filter(has_text=exact_line_pattern(dom_name))
     if rows.count() == 0:

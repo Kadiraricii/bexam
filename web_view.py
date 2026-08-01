@@ -532,7 +532,7 @@ def _render_exam_card_html(
         )
         if len(missing) > MISSING_LIST_COLLAPSE_THRESHOLD:
             missing_html = (
-                f'<details class="missing-list"><summary>{len(missing)} öğrenciyi göster</summary>'
+                f'<details class="missing-list" open><summary>{len(missing)} öğrenciyi göster</summary>'
                 f"{chips}</details>"
             )
         else:
