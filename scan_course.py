@@ -174,20 +174,23 @@ def _first_complete_status_row(page: Page) -> Locator | None:
     CANLI DOM (kullanicinin paylastigi HTML): bu liste Not Defteri'nin
     Ultra <tr>/[role='row'] tablosundan TAMAMEN FARKLI bir teknoloji -
     eski, Angular tabanli bir bilesen. Satirlar SUBMISSION_ROW_SELECTOR
-    ('.submission-list-row') class'ina sahip div'ler, ROW_SELECTOR
-    ("tr, [role='row']") burada HICBIR satiri eslestirmiyordu (CANLI
-    hata: onceki satir sayma mantigi bu sayfada hep 0 aday bulup hicbir
-    zaman calisamazdi). Tamamlanma isareti SUBMISSION_ROW_COMPLETE_SELECTOR
-    ('.status-is-complete' - yesil tik + 'Tamamlandı' metni) SADECE
-    gercekten notlandirilmis satirlarda DOM'a giriyor - 'Not verilecek
-    bir şey yok' durumundaki satirlarda hic yok, bu yuzden ayrica onu
-    elemeye gerek kalmiyor."""
+    ('.submission-list-row') class'ina sahip div'ler.
+
+    YEDEK (Fallback): Tablo 'Gönderildi' durumuna filtrelendiyse,
+    tablodaki TUM satirlar zaten gonderim yapmis ogrencilerdir. Eger
+    .status-is-complete yesil tik ikonu henuz yerlesmemisse bile,
+    tabloda satirlar varsa ilk gonderim satirini donerek basarisizligi
+    onler.
+    """
     rows = page.locator(SUBMISSION_ROW_SELECTOR)
-    for i in range(rows.count()):
+    row_count = rows.count()
+    if row_count == 0:
+        return None
+    for i in range(row_count):
         candidate = rows.nth(i)
         if candidate.locator(SUBMISSION_ROW_COMPLETE_SELECTOR).count() > 0:
             return candidate
-    return None
+    return rows.first
 
 
 class ExamRow(NamedTuple):
@@ -345,49 +348,84 @@ def return_to_grades_list(page: Page, grades_url: str, *, try_back: bool = True)
 
 def _filter_submissions_to_submitted(page: Page) -> None:
     """Gönderimler tablosunun ustundeki 'Öğrenci Durumu' filtresini
-    'Gönderildi'ye ayarlamayi dener - basarili olursa hic gonderilmemis/
-    taslak durumundaki ogrenciler tabloya HIC girmez, satir secimi
-    kokten basitlesir (kullanicinin talebi - bkz. ekran goruntusundeki
-    filtre acilir menusu: varsayilan 'Tüm Öğrenci Durumları' secili).
+    'Gönderildi'ye ayarlamayi dener.
 
-    ZORUNLU DEGIL: bu adimin BIRINCIL seçicisi (ID) CANLI DOM'dan
-    dogrulandi, ama yedekler (role/metin bazli) hala tahmin - basarisiz
-    olursa SESSIZCE devam edilir, cunku _first_complete_status_row filtre
-    olmadan da dogru satiri buluyor; bu sadece ekstra bir basitlestirme,
-    olmazsa olmaz bir on-kosul degil."""
+    CANLI BUG DUZELTMESI (kullanici geri bildirimi):
+    Filtreleme sirasinda dropdown menusu tekrar tiklandiginda ya da
+    menunun acik (overlay) kalmasi durumunda, ogrenci satirina tiklanirken
+    Angular filtreyi varsayilana ('Tüm Öğrenci Durumları') sifirlayip
+    filtrelemeyi bozuyordu.
+
+    Cozum:
+    1. Once dropdown tetikleyicisinde zaten 'Gönderildi' yazip yazmadigi
+       kontrol edilir. Zaten 'Gönderildi' ise menuye HIC TIKLANMAZ (filtre
+       korunur, bozulmaz).
+    2. Menuyu actiktan ve 'Gönderildi' secildikten sonra, menunun ekranda
+       acik (overlay) kalip ogrenci satirina tiklamayi engellemesini/
+       filtreyi bozmasini onlemek icin Escape tusu firlatilir ve menunun
+       kapanmasi beklenir.
+    3. Tablonun filtresinin oturmasi icin kisa bekleme yapilir.
+    """
+    trigger_loc = page.locator(f"#{STUDENT_STATUS_FILTER_TRIGGER_ID}")
     try:
-        page.locator(f"#{STUDENT_STATUS_FILTER_TRIGGER_ID}").click(timeout=3_000)
+        if trigger_loc.count() > 0:
+            trigger_text = trigger_loc.inner_text()
+            if SUBMITTED_FILTER_OPTION in trigger_text:
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                page.wait_for_timeout(300)
+                return
+    except Exception:
+        pass
+
+    opened = False
+    try:
+        trigger_loc.click(timeout=3_000)
+        opened = True
     except PlaywrightTimeoutError:
-        # ID Blackboard surumleri arasinda degisirse diye yedek: gercek
-        # eleman role="combobox" (role="button" DEGIL - onceki hatanin
-        # sebebi buydu) ve aria-labelledby ile "Öğrenci Durumu" etiketine
-        # bagli.
         try:
-            page.get_by_role("combobox", name=re.compile(STUDENT_STATUS_FILTER_LABEL)).first.click(
-                timeout=3_000
-            )
+            combo = page.get_by_role("combobox", name=re.compile(STUDENT_STATUS_FILTER_LABEL)).first
+            if combo.count() > 0 and SUBMITTED_FILTER_OPTION in combo.inner_text():
+                return
+            combo.click(timeout=3_000)
+            opened = True
         except PlaywrightTimeoutError:
             try:
-                page.get_by_text(STUDENT_STATUS_FILTER_DEFAULT_TEXT, exact=True).first.click(
-                    timeout=3_000
-                )
+                txt_lbl = page.get_by_text(STUDENT_STATUS_FILTER_DEFAULT_TEXT, exact=True).first
+                txt_lbl.click(timeout=3_000)
+                opened = True
             except PlaywrightTimeoutError:
                 return
 
+    if not opened:
+        return
+
+    option_clicked = False
     try:
-        page.locator(f'[role="option"][data-value="{SUBMITTED_FILTER_OPTION}"]').first.click(
-            timeout=3_000
-        )
+        opt = page.locator(f'[role="option"][data-value="{SUBMITTED_FILTER_OPTION}"]').first
+        if opt.count() > 0:
+            opt.click(timeout=3_000)
+            option_clicked = True
     except PlaywrightTimeoutError:
+        pass
+
+    if not option_clicked:
         try:
-            page.get_by_role(
+            opt_by_role = page.get_by_role(
                 "option", name=re.compile(f"^{re.escape(SUBMITTED_FILTER_OPTION)}$")
-            ).first.click(timeout=3_000)
+            ).first
+            if opt_by_role.count() > 0:
+                opt_by_role.click(timeout=3_000)
+                option_clicked = True
         except PlaywrightTimeoutError:
-            return
-    # Tablonun filtreye gore yeniden render olmasi icin kisa bir pay -
-    # hemen _first_complete_status_row'a gecersek eski (filtresiz)
-    # satirlari gorebiliriz.
+            pass
+
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
     page.wait_for_timeout(500)
 
 

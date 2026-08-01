@@ -63,3 +63,41 @@ def test_dedupe_exam_rows_counts_third_and_later_duplicates_separately():
     assert len(excluded) == 2
     assert "2. satır" in excluded[0]
     assert "3. satır" in excluded[1]
+
+
+def test_filter_submissions_skips_click_if_already_submitted():
+    from unittest.mock import MagicMock
+    from scan_course import _filter_submissions_to_submitted
+
+    page = MagicMock()
+    trigger_loc = MagicMock()
+    trigger_loc.count.return_value = 1
+    trigger_loc.inner_text.return_value = "Öğrenci Durumu: Gönderildi"
+    page.locator.return_value = trigger_loc
+
+    _filter_submissions_to_submitted(page)
+
+    # Menüye tekrar tıklanmamalı, Escape basılıp çıkılmalı
+    trigger_loc.click.assert_not_called()
+    page.keyboard.press.assert_called_with("Escape")
+
+
+def test_first_complete_status_row_fallback_when_complete_selector_missing():
+    from unittest.mock import MagicMock
+    from scan_course import _first_complete_status_row
+
+    page = MagicMock()
+    rows = MagicMock()
+    rows.count.return_value = 2
+
+    first_row = MagicMock()
+    first_row.locator.return_value.count.return_value = 0  # complete selector yok
+    second_row = MagicMock()
+    second_row.locator.return_value.count.return_value = 0
+
+    rows.nth.side_effect = lambda idx: first_row if idx == 0 else second_row
+    rows.first = first_row
+    page.locator.return_value = rows
+
+    res = _first_complete_status_row(page)
+    assert res == first_row
