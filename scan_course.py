@@ -102,6 +102,14 @@ SUBMITTED_COUNT_PATTERN = re.compile(r"(\d+)\s*/\s*\d+\s*g[öo]nderildi", re.IGN
 # ne olursa olsun BASTAN eleniyor - isme degil KATEGORIYE bakiyoruz
 # (ogretmen yoklama ogesini istedigi gibi adlandirabilir).
 ATTENDANCE_CATEGORY_MARKER = "Günlük"
+# Gönderimler tablosunun ustundeki "Öğrenci Durumu" filtresi varsayilan
+# olarak "Tüm Öğrenci Durumları" acilir (bkz. kullanicinin ekran
+# goruntusu) - "Gönderildi"ye ayarlanirsa hic gonderilmemis/taslak
+# ogrenciler tabloya HIC girmez, satir secimi kokten basitlesir (bkz.
+# _filter_submissions_to_submitted).
+STUDENT_STATUS_FILTER_LABEL = "Öğrenci Durumu"
+STUDENT_STATUS_FILTER_DEFAULT_TEXT = "Tüm Öğrenci Durumları"
+SUBMITTED_FILTER_OPTION = "Gönderildi"
 # Blackboard Ultra tablolari bazen gercek <tr> yerine <div role="row">
 # olarak render edilebilir - satir ararken HER ZAMAN ikisini de kapsiyoruz,
 # aksi halde bir tarafta calisip diger tarafta hicbir satir bulunamayabilir.
@@ -329,6 +337,42 @@ def return_to_grades_list(page: Page, grades_url: str, *, try_back: bool = True)
     page.wait_for_selector(GRADES_LIST_READY_SELECTOR, timeout=15_000)
 
 
+def _filter_submissions_to_submitted(page: Page) -> None:
+    """Gönderimler tablosunun ustundeki 'Öğrenci Durumu' filtresini
+    'Gönderildi'ye ayarlamayi dener - basarili olursa hic gonderilmemis/
+    taslak durumundaki ogrenciler tabloya HIC girmez, satir secimi
+    kokten basitlesir (kullanicinin talebi - bkz. ekran goruntusundeki
+    filtre acilir menusu: varsayilan 'Tüm Öğrenci Durumları' secili).
+
+    ZORUNLU DEGIL: bu adimin seçicileri CANLI oturumda henuz dogrulanmadi
+    (hata alinirsa terminal/log ciktisi paylasilip duzeltilmeli) - basarisiz
+    olursa SESSIZCE devam edilir, cunku _first_complete_status_row filtre
+    olmadan da dogru satiri buluyor; bu sadece ekstra bir basitlestirme,
+    olmazsa olmaz bir on-kosul degil."""
+    try:
+        page.get_by_role("button", name=re.compile(STUDENT_STATUS_FILTER_LABEL)).first.click(
+            timeout=3_000
+        )
+    except PlaywrightTimeoutError:
+        try:
+            page.get_by_text(STUDENT_STATUS_FILTER_DEFAULT_TEXT, exact=True).first.click(
+                timeout=3_000
+            )
+        except PlaywrightTimeoutError:
+            return
+
+    try:
+        page.get_by_role(
+            "option", name=re.compile(f"^{re.escape(SUBMITTED_FILTER_OPTION)}$")
+        ).first.click(timeout=3_000)
+        # Tablonun filtreye gore yeniden render olmasi icin kisa bir pay -
+        # hemen _first_complete_status_row'a gecersek eski (filtresiz)
+        # satirlari gorebiliriz.
+        page.wait_for_timeout(500)
+    except PlaywrightTimeoutError:
+        pass
+
+
 def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
     """Not Defteri satirindaki 'Tamamlandı' etiketine tiklandiktan SONRA
     cagrilir.
@@ -371,6 +415,12 @@ def _enter_flexible_grading_view(page: Page, row_name: str) -> None:
         return
     except PlaywrightTimeoutError:
         pass
+
+    # bkz. _filter_submissions_to_submitted docstring'i - kullanicinin
+    # istegi: satir secmeden ONCE listeyi 'Gönderildi'ye filtrele, boylece
+    # hic gonderilmemis ogrenciler tabloya HIC girmez. Filtre basarisiz
+    # olsa da _first_complete_status_row asagida yine dogru satiri bulur.
+    _filter_submissions_to_submitted(page)
 
     submission_row = _first_complete_status_row(page)
     if submission_row is None:
