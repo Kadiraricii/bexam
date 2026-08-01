@@ -583,7 +583,10 @@ def capture_exam_submissions(
 
     emit(f"  '{row_name}' öğrenci listesi taranıyor (kaydırarak toplanıyor)...")
     student_rows = find_student_rows(page)
-    emit(f"  {len(student_rows)} öğrenci satırı bulundu.")
+    emit(f"  {len(student_rows)} öğrenci satırı bulundu:")
+    for idx, (s_name, s_score) in enumerate(student_rows, 1):
+        score_disp = f" ({s_score})" if s_score else ""
+        emit(f"    • {idx}. {s_name}{score_disp}")
 
     # exam_dir = course_dir / sanitize(row_name) (bkz. main()/gui.py'deki
     # cagiran taraf) - roster CSV'si ('Öğrenci Tara' ile uretilir) DERS

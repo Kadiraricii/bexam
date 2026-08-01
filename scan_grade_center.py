@@ -450,7 +450,11 @@ def main() -> None:
             print("Ogrenci listesi taraniyor (kaydirarak toplaniyor)...")
             student_rows = find_student_rows(page)
             print(f"\nSinav: {exam_label}")
-            print(f"{len(student_rows)} ogrenci satiri bulundu.\n")
+            print(f"{len(student_rows)} ogrenci satiri bulundu:")
+            for idx, (s_name, s_score) in enumerate(student_rows, 1):
+                score_disp = f" ({s_score})" if s_score else ""
+                print(f"  • {idx}. {s_name}{score_disp}")
+            print()
 
             if not student_rows:
                 print(
