@@ -375,6 +375,8 @@ def capture_student(
 
     matched = False
     body_text = ""
+    info = extract_page_info(body_text)
+    score_ok = False
     expected_score = normalize_score(sidebar_score) if sidebar_score else None
     for _ in range(MAX_WAIT_ATTEMPTS):
         body_text = page.inner_text("body")

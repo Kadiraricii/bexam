@@ -9,7 +9,12 @@ Ikisi de bu oturumda bulunan gercek hata siniflarinin regresyon testleri:
   sayfasini da 'dogru' saymasi (yanlis ogrenciye yanlis PDF riski).
 """
 
-from scan_grade_center import SUBMIT_DATE_MARKER, _merge_scroll_window, header_matches_student
+from scan_grade_center import _merge_scroll_window, header_matches_student
+
+# Testlerde kullanilan duz metin - scan_grade_center.SUBMIT_DATE_MARKER_PATTERN
+# (regex + re.IGNORECASE) bunu BUYUK/KUCUK harf farketmeksizin eslemeli, bkz.
+# test_header_matches_student_accepts_sentence_case_marker.
+SUBMIT_DATE_MARKER = "GÖNDERİM TARİHİ"
 
 # ---------- _merge_scroll_window ----------
 
@@ -103,3 +108,14 @@ def test_header_matches_student_only_searches_window_before_marker():
     body = f"{SUBMIT_DATE_MARKER}: 01.01.2026\nAYŞE KAYA"
 
     assert header_matches_student(body, "AYŞE KAYA") is False
+
+
+def test_header_matches_student_accepts_sentence_case_marker():
+    # CANLI DOGRULANAN HATA: Blackboard'un "Çevrimiçi Test/Quiz"
+    # degerlendirme sayfasinda bu etiket TUM BUYUK HARF DEGIL, cumle-ici
+    # bicimde ("Gönderim tarihi: ...") gorunuyor - bkz. scan_grade_center.
+    # SUBMIT_DATE_MARKER_PATTERN'daki ayni notun tam metni. Bu regresyon
+    # testi olmadan bu sinav turunde TEK BIR PDF bile uretilemiyordu.
+    body = "Degerlendirme\nYUNUS AKSU\nGönderim tarihi: 18.03.2026 17:29\nOnay: abc123"
+
+    assert header_matches_student(body, "YUNUS AKSU") is True
