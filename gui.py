@@ -64,7 +64,7 @@ from common import (
     find_blackboard_pages,
     has_seen_onboarding,
     is_browser_closed_error,
-    is_browser_missing_error,
+    is_chrome_missing_error,
     is_profile_lock_error,
     launch_browser_context,
     live_url,
@@ -2253,7 +2253,8 @@ class BlackboardGUI:
         text_widget.config(state="disabled")
 
     def _build_settings_page(self, parent: tk.Widget) -> None:
-        wrapper = tk.Frame(parent, bg=COLOR_BG)
+        scroll_body = self._make_scrollable_area(parent)
+        wrapper = tk.Frame(scroll_body, bg=COLOR_BG)
         wrapper.pack(fill="both", expand=True, padx=28, pady=24)
         tk.Label(
             wrapper, text="Ayarlar", bg=COLOR_BG, fg=COLOR_TEXT, font=("", 22, "bold"), anchor="w",
@@ -2743,10 +2744,11 @@ class BlackboardGUI:
                     elif command == "open_browser":
                         try:
                             PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                            # launch_browser_context: once Chrome dener, kurulu
-                            # degilse otomatik Microsoft Edge'e duser, PROFIL
-                            # KILIDI hatasinda da bir kez temizleyip yeniden
-                            # dener - bkz. o fonksiyonun docstring'i.
+                            # launch_browser_context: once Chrome dener,
+                            # Windows'ta kurulu degilse otomatik Portable
+                            # Chrome yedegine duser, PROFIL KILIDI hatasinda
+                            # da bir kez temizleyip yeniden dener - bkz. o
+                            # fonksiyonun docstring'i.
                             context = launch_browser_context(p, PROFILE_DIR)
                         except Exception as exc:
                             # Baslatma basarisizsa yarim bir context kalmasin -
@@ -3298,8 +3300,15 @@ class BlackboardGUI:
             emit(f"[{row_index + 1}/{len(student_rows)}] {display_name}")
             try:
                 entry = capture_student(
-                    page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
-                    exam_name=exam_label, roster=roster,
+                    page,
+                    exam_dir=exam_dir,
+                    dom_name=raw_name,
+                    occurrence_index=occurrence - 1,
+                    display_name=display_name,
+                    sidebar_score=sidebar_score,
+                    exam_label=exam_label,
+                    exam_name=exam_label,
+                    roster=roster,
                 )
                 emit(f"  OK  onay={entry['onay']}  puan={entry['puan']}")
                 if entry["bozuk_gorsel_sayisi"] > 0:
@@ -3434,19 +3443,22 @@ class BlackboardGUI:
                     "Tarayıcı açılamadı. Program zaten başka bir pencerede "
                     "açık olabilir — diğer pencereyi (varsa) kapatıp tekrar dene.",
                 )
-            elif payload and is_browser_missing_error(payload):
-                # bkz. common.launch_browser_context docstring'i: bu noktaya
-                # gelindiyse hem Chrome HEM Edge denenmis, ikisi de basarisiz
-                # olmus demektir (Chrome kuruluysa/Edge kuruluysa zaten
-                # sessizce ilgili tarayiciya gecilirdi, buraya hic dusulmezdi).
+            elif payload and is_chrome_missing_error(payload):
+                # bkz. common.launch_browser_context docstring'i: Windows'ta
+                # Chrome bulunamayinca ONCE otomatik olarak Portable Chrome
+                # denenir (kurulu ise sessizce kullanilir, degilse kurulum
+                # sihirbazi ACILIR) - bu mesaj SADECE o yedekler de basarisiz
+                # olduysa (ör. macOS/Linux'ta, ya da Windows'ta kurulum
+                # dosyasi projeye hic eklenmemisse) gosterilir.
                 messagebox.showerror(
-                    "Google Chrome veya Microsoft Edge bulunamadı",
-                    "Bu program gerçek Google Chrome ya da Microsoft Edge "
-                    "tarayıcısını kullanıyor ama bilgisayarda ikisi de kurulu "
-                    "görünmüyor.\n\n"
-                    "Şu adreslerden birini kurup programı tekrar başlat:\n"
-                    "https://www.google.com/chrome/\n"
-                    "https://www.microsoft.com/edge",
+                    "Google Chrome bulunamadı",
+                    "Bu program gerçek Google Chrome tarayıcısını kullanıyor "
+                    "ama bilgisayarda kurulu görünmüyor.\n\n"
+                    "Şu adresten Chrome'u kurup programı tekrar başlat:\n"
+                    "https://www.google.com/chrome/\n\n"
+                    "Windows kullanıyorsan: program klasöründeki vendor/ "
+                    "altına bir Portable Chrome kurulumu ekleyip tekrar "
+                    "deneyebilirsin.",
                 )
             else:
                 messagebox.showerror("Hata", f"Tarayıcı açılamadı: {payload}")

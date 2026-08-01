@@ -2,6 +2,24 @@
 output/
 .state/
 
+# Portable Chrome yedeginin KURULUM SONUCU (Windows'ta kullanicinin
+# vendor/GoogleChromePortable_installer.exe'yi calistirinca buraya
+# actigi/kurdugu asil tarayici dosyalari) - buyuk ve platforma ozel
+# oldugu icin commit'lenmiyor. Kucuk (~1.5MB) kurulum dosyasinin
+# KENDISI (vendor/GoogleChromePortable_installer.exe) BILEREK ignore
+# EDILMIYOR - bkz. common.py::PORTABLE_CHROME_INSTALLER_PATH.
+vendor/portable_chrome/
+
+# Proje kokune DOGRUDAN eklenen, TAM/hazir PortableApps.com
+# "GoogleChromePortable" kopyasi (bkz. common.py::BUNDLED_PORTABLE_CHROME_DIR) -
+# Windows'ta Chrome kurulu olmayan makinelerde internet indirmesi
+# GEREKTIRMEDEN aninda calisan yedek tarayici. GitHub'a KESINLIKLE
+# commit'lenmemeli: tek basina App/Chrome-bin/.../chrome.dll ~240MB,
+# GitHub'in dosya basina 100MB'lik SERT sinirini asiyor (LFS olmadan
+# push zaten reddedilir). Proje bu klasorle BIRLIKTE git DISI bir
+# yontemle (ör. zip/USB/paylasilan klasor) dagitilmali.
+GoogleChromePortable/
+
 # Python
 .venv/
 __pycache__/

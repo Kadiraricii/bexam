@@ -144,10 +144,17 @@ html, body {
 [class*="srOnly"],
 [class*="offScreen"],
 [class*="offscreen"],
+[class*="off-screen"],
 [class*="visuallyHidden"],
 [class*="visually-hidden"],
+[class*="screen-reader"],
+[class*="screenreader"],
+[class*="ScreenReader"],
+[class*="cdk-visually-hidden"],
+[aria-hidden="true"],
 .sr-only,
-.hideOffScreen {
+.hideOffScreen,
+.visually-hidden {
     position: absolute !important;
     width: 1px !important;
     height: 1px !important;
@@ -164,10 +171,17 @@ html, body {
 [class*="srOnly"] *,
 [class*="offScreen"] *,
 [class*="offscreen"] *,
+[class*="off-screen"] *,
 [class*="visuallyHidden"] *,
 [class*="visually-hidden"] *,
+[class*="screen-reader"] *,
+[class*="screenreader"] *,
+[class*="ScreenReader"] *,
+[class*="cdk-visually-hidden"] *,
+[aria-hidden="true"] *,
 .sr-only *,
-.hideOffScreen * {
+.hideOffScreen *,
+.visually-hidden * {
     overflow: hidden !important;
 }
 """
@@ -212,6 +226,12 @@ HIDE_NAVIGATION_CHROME_CSS = """
 [class*="drawer"],
 [class*="backdrop"] {
     display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
 }
 """
 # UYARI: `[class*="hide-in-background"]` ve `[class*="has-footer"]`
@@ -405,6 +425,110 @@ def wait_images_all_frames(page: Page) -> dict:
     return {"total": total, "pending": pending, "failed": failed, "waitedMs": max_waited}
 
 
+def add_style_all_frames(page: Page, css: str) -> list:
+    """FORCE_VISIBLE_CSS/HIDE_NAVIGATION_CHROME_CSS gibi bir stil etiketini
+    ana sayfa VE icindeki her (same-origin) cerceveye ekler, eklenen tum
+    stil elemani tutamaclarini (handle) dondurur - cagiran taraf isini
+    bitirince bunlarin HEPSINI kaldirmali (bkz. capture_current_page'in
+    finally blogu).
+
+    CANLI DOGRULANAN HATA: bu fonksiyon eklenmeden ONCE FORCE_VISIBLE_CSS/
+    HIDE_NAVIGATION_CHROME_CSS SADECE `page.add_style_tag(...)` ile ANA
+    sayfaya ekleniyordu - scroll_all_frames/wait_images_all_frames'in
+    AKSINE iframe'ler (ör. odevin yuklenen Word/PDF dosyasinin gomulu
+    onizleyicisi - bkz. switch_to_submission_tab docstring'i) bu CSS'i
+    HIC GORMUYORDU. Sonuc: iframe icindeki kendi `min-height: 100vh`
+    benzeri sarmalayicilari, position:fixed/sticky elemanlari VE
+    ekran-okuyucuya-ozel (sr-only/hideOffScreen) etiketleri asla
+    notralize edilmiyordu - bu da (a) PDF'in SONUNDA, onizlenen dosyanin
+    kendi ic yuksekligine bagli olarak DEGISKEN sayida (kullanicinin
+    bildirdigi gibi "birinde 23 sayfa birinde 15 sayfa") BOS sayfa VE
+    (b) iframe'in kendi sr-only etiketlerinin, konumlandirmasi hala
+    static'e zorlanmadigi icin sayfanin GORUNUR bir yerinde (kullanicinin
+    bildirdigi gibi SADECE bu iceriğin bastigi sayfada, ör. 3. sayfada)
+    ortaya cikmasi anlamina geliyordu. Ana sayfayla AYNI CSS'i her
+    cerceveye ayri ayri eklemek bu iki sonucu da kokten cozer.
+
+    Cross-origin bir iframe'e stil enjekte etmek guvenlik geregi mumkun
+    degil - boyle bir cerceve sessizce atlanir (elimizden baska bir sey
+    gelmez, cokme olmaz - AYNI scroll_all_frames/wait_images_all_frames
+    davranisi)."""
+    handles = []
+    for frame in _iter_frames(page):
+        try:
+            handles.append(frame.add_style_tag(content=css))
+        except Exception:
+            continue
+    return handles
+
+
+def remove_style_all_frames(handles: list) -> None:
+    """add_style_all_frames'in dondurdugu TUM tutamaclari kaldirir - tek
+    tek kaldirma sirasinda bir tanesi basarisiz olsa (ör. o cerceve bu
+    arada kapanmis/gecis yapmis olabilir) bile digerlerini kaldirmaya
+    devam eder, hicbiri yakalama sonucunu etkilemez."""
+    for handle in handles:
+        try:
+            handle.evaluate("el => el.remove()")
+        except Exception:
+            continue
+
+
+# capture_current_page'in yazdirmadan hemen once calistirdigi son temizlik
+# gecisi: sr-only etiketlerini INLINE stille bir daha kilitler, bos
+# backdrop/overlay elemanlarini gizler, alt bosluklari sifirlar. Once
+# SADECE ana sayfada `page.evaluate(...)` ile calisiyordu - AYNI
+# add_style_all_frames'teki gerekceyle (bkz. o fonksiyonun docstring'i)
+# artik _run_final_cleanup_all_frames ile HER cercevede calisiyor, cunku
+# gomulu onizleyici iframe'inin KENDI sr-only etiketleri/bos overlay'leri
+# de bu son temizligi gerektirebilir.
+FINAL_CLEANUP_JS = """() => {
+    const srElements = document.querySelectorAll(
+        '[class*="hideOffScreen"], [class*="sr-only"], [class*="srOnly"], [class*="offScreen"], [class*="offscreen"], [class*="off-screen"], [class*="visuallyHidden"], [class*="visually-hidden"], [class*="screen-reader"], [class*="screenreader"], [class*="ScreenReader"], [class*="cdk-visually-hidden"], [aria-hidden="true"], .sr-only, .hideOffScreen, .visually-hidden'
+    );
+    srElements.forEach(el => {
+        el.style.setProperty('overflow', 'hidden', 'important');
+        el.style.setProperty('width', '1px', 'important');
+        el.style.setProperty('height', '1px', 'important');
+        el.style.setProperty('position', 'absolute', 'important');
+        el.style.setProperty('clip', 'rect(0, 0, 0, 0)', 'important');
+    });
+
+    const overlays = document.querySelectorAll(
+        '.MuiBackdrop-root, .MuiModal-root, .MuiPopover-root, .MuiDialog-root, [class*="backdrop"], [class*="overlay"]'
+    );
+    overlays.forEach(el => {
+        if (!el.innerText || !el.innerText.trim()) {
+            el.style.display = 'none';
+            el.style.height = '0px';
+            el.style.minHeight = '0px';
+            el.style.margin = '0px';
+            el.style.padding = '0px';
+        }
+    });
+
+    if (document.body) {
+        document.body.style.paddingBottom = '0px';
+        document.body.style.marginBottom = '0px';
+    }
+    const mainEl = document.querySelector('main, [role="main"], [class*="attempt-grading"]');
+    if (mainEl) {
+        mainEl.style.paddingBottom = '0px';
+        mainEl.style.marginBottom = '0px';
+    }
+}"""
+
+
+def run_final_cleanup_all_frames(page: Page) -> None:
+    """FINAL_CLEANUP_JS'i ana sayfa VE icindeki her cerceve icin calistirir
+    - bkz. FINAL_CLEANUP_JS ve add_style_all_frames docstring'leri."""
+    for frame in _iter_frames(page):
+        try:
+            frame.evaluate(FINAL_CLEANUP_JS)
+        except Exception:
+            continue
+
+
 def capture_current_page(
     page: Page,
     output_dir: Path = OUTPUT_DIR,
@@ -465,15 +589,21 @@ def capture_current_page(
     # odev aciklamasidir, ogrencinin gonderdigi icerik degil).
     switch_to_submission_tab(page)
 
-    style_handle = page.add_style_tag(content=FORCE_VISIBLE_CSS)
+    # add_style_all_frames: ana sayfa VE icindeki her (same-origin)
+    # cerceveye ekler - bkz. o fonksiyonun docstring'indeki CANLI
+    # DOGRULANAN HATA notu (SADECE ana sayfaya eklendiginde, gomulu
+    # onizleyici iframe'inin KENDI min-height/position/sr-only sorunlari
+    # notralize edilmiyor, bu da DEGISKEN sayida bos sayfaya VE sadece
+    # o icerigin bastigi sayfada goruntlenen "anlamsiz sayilara" yol
+    # aciyordu).
+    style_handles = add_style_all_frames(page, FORCE_VISIBLE_CSS)
     # bkz. HIDE_NAVIGATION_CHROME_CSS docstring'i: sol "Öğrenciler" paneli
     # ve diger sinav-disi UI ogeleri (geri bildirim/seçenekler butonlari,
     # onceki/sonraki ogrenci oklari) yazdirmadan ONCE gizleniyor - hem
     # gereksiz bos sayfa riskini azaltir hem PDF'i daha temiz/profesyonel
-    # hale getirir. AYRI bir style etiketi olarak tutuluyor ki asagidaki
-    # finally'de FORCE_VISIBLE_CSS'ten BAGIMSIZ, kendi basina guvenle
-    # kaldirilabilsin.
-    nav_style_handle = page.add_style_tag(content=HIDE_NAVIGATION_CHROME_CSS)
+    # hale getirir. AYRI bir liste olarak tutuluyor ki asagidaki finally'de
+    # FORCE_VISIBLE_CSS'ten BAGIMSIZ, kendi basina guvenle kaldirilabilsin.
+    nav_style_handles = add_style_all_frames(page, HIDE_NAVIGATION_CHROME_CSS)
     try:
         scroll_results = scroll_all_frames(page)
         unstable = [r for r in scroll_results if not r["stabilized"]]
@@ -528,22 +658,9 @@ def capture_current_page(
 
         # Yazdirmadan hemen once, sayfa altinda bos/ekstra PDF sayfalari kalmasina
         # neden olabilen sakli backdrop/overlay/drawer elemanlarini ve min-height'leri
-        # temizliyoruz.
-        try:
-            page.evaluate("""() => {
-                const overlays = document.querySelectorAll(
-                    '.MuiBackdrop-root, .MuiModal-root, .MuiPopover-root, .MuiDialog-root, [class*="backdrop"], [class*="overlay"]'
-                );
-                overlays.forEach(el => {
-                    if (!el.innerText || !el.innerText.trim()) {
-                        el.style.display = 'none';
-                        el.style.height = '0px';
-                        el.style.minHeight = '0px';
-                    }
-                });
-            }""")
-        except Exception:
-            pass
+        # temizliyoruz - ana sayfa VE icindeki her cerceve icin (bkz.
+        # run_final_cleanup_all_frames/FINAL_CLEANUP_JS docstring'i).
+        run_final_cleanup_all_frames(page)
 
         try:
             page.pdf(path=str(pdf_path), format="A4", print_background=True)
@@ -558,18 +675,12 @@ def capture_current_page(
                 "değiştirmeyi dene."
             ) from exc
     finally:
-        try:
-            style_handle.evaluate("el => el.remove()")
-        except Exception:
-            # Sayfa bu arada kapanmis/gecis yapmis olabilir - kaldirma
-            # basarisiz olsa bile yakalama sonucunu etkilememeli.
-            pass
-        try:
-            nav_style_handle.evaluate("el => el.remove()")
-        except Exception:
-            # Ayni gerekce - bu kaldirma da BAGIMSIZ ve basarisizligi
-            # yakalama sonucunu etkilememeli.
-            pass
+        # remove_style_all_frames kendi icinde her tutamaci ayri ayri dener
+        # ve tek tek basarisizliklari yutar - bkz. o fonksiyonun docstring'i
+        # (sayfa bu arada kapanmis/gecis yapmis olabilir, kaldirma basarisiz
+        # olsa bile yakalama sonucunu etkilememeli).
+        remove_style_all_frames(style_handles)
+        remove_style_all_frames(nav_style_handles)
         try:
             page.evaluate(RESET_SCROLL_AFTER_CAPTURE_JS)
         except Exception:
@@ -610,9 +721,10 @@ def main() -> None:
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        # launch_browser_context: once Chrome dener, kurulu degilse
-        # otomatik Microsoft Edge'e duser, PROFIL KILIDI hatasinda da
-        # bir kez temizleyip yeniden dener - bkz. o fonksiyonun docstring'i.
+        # launch_browser_context: once Chrome dener, Windows'ta kurulu
+        # degilse otomatik Portable Chrome yedegine duser, PROFIL KILIDI
+        # hatasinda da bir kez temizleyip yeniden dener - bkz. o fonksiyonun
+        # docstring'i.
         context = launch_browser_context(p, PROFILE_DIR)
 
         try:

@@ -160,42 +160,111 @@ def test_is_chrome_missing_error_ignores_unrelated_errors():
     assert not common.is_chrome_missing_error(RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
 
 
-def test_is_browser_missing_error_recognizes_msedge_channel_message():
-    # is_chrome_missing_error SADECE 'chrome' kanalina ozel - launch_browser_
-    # context Edge'e dustukten SONRA Edge DE bulunamazsa Playwright ayni
-    # kalipta ama 'msedge' gecen bir mesaj veriyor. is_browser_missing_error
-    # kanaldan BAGIMSIZ olarak bunu da tanimali.
-    exc = RuntimeError(
-        "BrowserType.launch: Chromium distribution 'msedge' is not found at ...\n"
-        'Run "playwright install msedge"'
+# ---------- find_portable_chrome_executable ----------
+# CANLI ISTEK (kullanici): bazi Windows bilgisayarlarinda Google Chrome
+# kurulu olmuyor - bu makinelerde, projeye eklenen (PortableApps.com'dan
+# indirilen) Portable Chrome kurulumu yedek olarak kullaniliyor. macOS/
+# Linux'ta boyle bir kavram YOK (bkz. PORTABLE_CHROME_DIR tanimi) - bu
+# yuzden find_portable_chrome_executable o platformlarda HER ZAMAN None
+# donmeli, klasorde gercekten bir chrome.exe olsa BILE.
+
+
+def _isolate_portable_chrome_dirs(monkeypatch, tmp_path, *, bundled=None, installed=None):
+    # find_portable_chrome_executable ARTIK iki ayri klasoru sirayla arar
+    # (bkz. common.py::BUNDLED_PORTABLE_CHROME_DIR docstring'i) - testlerin
+    # bu makinede GERCEKTEN var olan bir GoogleChromePortable/ klasorunden
+    # (ör. gelistiricinin kendi checkout'u) etkilenmemesi icin HER IKI
+    # degisken de HER ZAMAN (var olmayan bir varsayilanla) izole ediliyor.
+    monkeypatch.setattr(
+        common, "BUNDLED_PORTABLE_CHROME_DIR", bundled or (tmp_path / "does-not-exist-bundled")
+    )
+    monkeypatch.setattr(
+        common, "PORTABLE_CHROME_DIR", installed or (tmp_path / "does-not-exist-installed")
     )
 
-    assert common.is_browser_missing_error(exc)
+
+def test_find_portable_chrome_executable_returns_none_on_non_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(common.platform, "system", lambda: "Darwin")
+    _isolate_portable_chrome_dirs(monkeypatch, tmp_path, bundled=tmp_path)
+    (tmp_path / "chrome.exe").write_text("fake")
+
+    assert common.find_portable_chrome_executable() is None
 
 
-def test_is_browser_missing_error_ignores_unrelated_errors():
-    assert not common.is_browser_missing_error(RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
+def test_find_portable_chrome_executable_finds_nested_exe_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    _isolate_portable_chrome_dirs(monkeypatch, tmp_path, bundled=tmp_path)
+    nested = tmp_path / "App" / "Chrome-bin"
+    nested.mkdir(parents=True)
+    expected = nested / "chrome.exe"
+    expected.write_text("fake")
+
+    assert common.find_portable_chrome_executable() == expected
 
 
-# ---------- launch_browser_context / Chrome yoksa Edge'e dusme ----------
-# CANLI ISTEK (kullanici): bazi bilgisayarlarda Google Chrome kurulu
-# olmuyor ama Microsoft Edge kurulu oluyor - bu grup, Chrome bulunamazsa
-# otomatik olarak Edge'in denendigini, gercek bir tarayici ACMADAN
-# (sahte/stub bir Playwright nesnesiyle) dogruluyor.
+def test_find_portable_chrome_executable_returns_none_when_dir_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    _isolate_portable_chrome_dirs(monkeypatch, tmp_path)
+
+    assert common.find_portable_chrome_executable() is None
+
+
+def test_find_portable_chrome_executable_prefers_bundled_dir_over_installed_dir(tmp_path, monkeypatch):
+    # CANLI ISTEK (kullanici): proje kokune DOGRUDAN, hazir/calisir
+    # durumda bir GoogleChromePortable/ kopyasi eklendi (bkz.
+    # common.py::BUNDLED_PORTABLE_CHROME_DIR) - bu, internet indirmesi
+    # gerektiren kucuk kurulum dosyasindan (PORTABLE_CHROME_DIR) daha
+    # hizli/guvenilir oldugu icin ONCE denenmeli. Bu test ikisi de
+    # mevcutken BUNDLED olanin secildigini dogrular.
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    bundled_dir = tmp_path / "bundled"
+    installed_dir = tmp_path / "installed"
+    bundled_exe = bundled_dir / "App" / "Chrome-bin" / "chrome.exe"
+    installed_exe = installed_dir / "App" / "Chrome-bin" / "chrome.exe"
+    bundled_exe.parent.mkdir(parents=True)
+    installed_exe.parent.mkdir(parents=True)
+    bundled_exe.write_text("fake")
+    installed_exe.write_text("fake")
+    _isolate_portable_chrome_dirs(monkeypatch, tmp_path, bundled=bundled_dir, installed=installed_dir)
+
+    assert common.find_portable_chrome_executable() == bundled_exe
+
+
+def test_find_portable_chrome_executable_falls_back_to_installed_dir_when_bundled_missing(
+    tmp_path, monkeypatch
+):
+    # Bundled kopya projeye eklenmemisse (ör. baska bir gelistiricinin
+    # checkout'unda) eski (kucuk kurulum dosyasinin hedefi) yedek YINE DE
+    # calismali - geriye donuk uyumluluk.
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    installed_dir = tmp_path / "installed"
+    installed_exe = installed_dir / "App" / "Chrome-bin" / "chrome.exe"
+    installed_exe.parent.mkdir(parents=True)
+    installed_exe.write_text("fake")
+    _isolate_portable_chrome_dirs(monkeypatch, tmp_path, installed=installed_dir)
+
+    assert common.find_portable_chrome_executable() == installed_exe
+
+
+# ---------- launch_browser_context / Chrome yoksa Portable Chrome'a dusme ----------
+# CANLI ISTEK (kullanici): Edge yedegi yerine, Windows'a ozel Portable
+# Chrome yedegi eklendi (bkz. common.py::launch_browser_context
+# docstring'i) - macOS/Linux'ta boyle bir yedek yok, Chrome bulunamazsa
+# dogrudan orijinal hata yukari firlatilir.
 
 
 class _FakeChromiumLauncher:
-    """launch_persistent_context cagrilarini kaydeden, istenen sirada
-    basarili/basarisiz sonuc donduren sahte `p.chromium` nesnesi."""
+    """launch_persistent_context cagrilarini (TAM kwargs ile) kaydeden,
+    istenen sirada basarili/basarisiz sonuc donduren sahte `p.chromium`
+    nesnesi."""
 
     def __init__(self, outcomes):
-        # outcomes: her cagrida sirayla tuketilecek [(channel, sonuc_veya_istisna), ...]
+        # outcomes: her cagrida sirayla tuketilecek [sonuc_veya_istisna, ...]
         self._outcomes = list(outcomes)
         self.calls = []
 
     def launch_persistent_context(self, user_data_dir, headless=False, **kwargs):
-        channel = kwargs.get("channel")
-        self.calls.append(channel)
+        self.calls.append(kwargs)
         if not self._outcomes:
             raise AssertionError("Beklenenden fazla launch_persistent_context cagrisi")
         outcome = self._outcomes.pop(0)
@@ -209,6 +278,12 @@ class _FakePlaywright:
         self.chromium = _FakeChromiumLauncher(outcomes)
 
 
+_CHROME_MISSING_EXC = RuntimeError(
+    "BrowserType.launch: Chromium distribution 'chrome' is not found at ...\n"
+    'Run "playwright install chrome"'
+)
+
+
 def test_launch_browser_context_uses_chrome_when_available(tmp_path):
     fake_context = object()
     p = _FakePlaywright([fake_context])
@@ -216,50 +291,90 @@ def test_launch_browser_context_uses_chrome_when_available(tmp_path):
     result = common.launch_browser_context(p, tmp_path)
 
     assert result is fake_context
-    assert p.chromium.calls == ["chrome"]
+    assert len(p.chromium.calls) == 1
+    assert p.chromium.calls[0]["channel"] == "chrome"
+    assert "executable_path" not in p.chromium.calls[0]
 
 
-def test_launch_browser_context_falls_back_to_edge_when_chrome_missing(tmp_path):
-    chrome_missing = RuntimeError(
-        "BrowserType.launch: Chromium distribution 'chrome' is not found at ...\n"
-        'Run "playwright install chrome"'
-    )
+def test_launch_browser_context_uses_portable_chrome_on_windows_when_chrome_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    portable_path = tmp_path / "App" / "Chrome-bin" / "chrome.exe"
+    monkeypatch.setattr(common, "find_portable_chrome_executable", lambda: portable_path)
+
     fake_context = object()
-    p = _FakePlaywright([chrome_missing, fake_context])
+    p = _FakePlaywright([_CHROME_MISSING_EXC, fake_context])
 
     result = common.launch_browser_context(p, tmp_path)
 
     assert result is fake_context
-    assert p.chromium.calls == ["chrome", "msedge"]
+    assert len(p.chromium.calls) == 2
+    assert p.chromium.calls[0]["channel"] == "chrome"
+    assert p.chromium.calls[1]["executable_path"] == str(portable_path)
+    assert "channel" not in p.chromium.calls[1]
 
 
-def test_launch_browser_context_raises_if_neither_browser_available(tmp_path):
-    chrome_missing = RuntimeError(
-        "BrowserType.launch: Chromium distribution 'chrome' is not found at ...\n"
-        'Run "playwright install chrome"'
+def test_launch_browser_context_does_not_use_portable_chrome_on_non_windows(tmp_path, monkeypatch):
+    # macOS/Linux'ta Portable Chrome kavrami yok - Chrome eksikse yedek
+    # DENENMEDEN orijinal hata dogrudan yukari firlatilmali.
+    monkeypatch.setattr(common.platform, "system", lambda: "Darwin")
+    find_calls = []
+    monkeypatch.setattr(
+        common, "find_portable_chrome_executable", lambda: find_calls.append(1) or None
     )
-    msedge_missing = RuntimeError(
-        "BrowserType.launch: Chromium distribution 'msedge' is not found at ...\n"
-        'Run "playwright install msedge"'
-    )
-    p = _FakePlaywright([chrome_missing, msedge_missing])
 
-    with pytest.raises(RuntimeError, match="msedge"):
+    p = _FakePlaywright([_CHROME_MISSING_EXC])
+
+    with pytest.raises(RuntimeError, match="chrome"):
         common.launch_browser_context(p, tmp_path)
 
-    assert p.chromium.calls == ["chrome", "msedge"]
+    assert len(p.chromium.calls) == 1
+    assert not find_calls  # find_portable_chrome_executable hic cagrilmamali
 
 
-def test_launch_browser_context_does_not_fall_back_to_edge_for_unrelated_errors(tmp_path):
+def test_launch_browser_context_launches_installer_when_portable_chrome_not_yet_installed(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(common, "find_portable_chrome_executable", lambda: None)
+    fake_installer = tmp_path / "installer.exe"
+    fake_installer.write_text("fake")
+    monkeypatch.setattr(common, "PORTABLE_CHROME_INSTALLER_PATH", fake_installer)
+    monkeypatch.setattr(common, "PORTABLE_CHROME_DIR", tmp_path / "portable_chrome")
+
+    popen_calls = []
+    monkeypatch.setattr(common.subprocess, "Popen", lambda args: popen_calls.append(args))
+
+    p = _FakePlaywright([_CHROME_MISSING_EXC])
+
+    with pytest.raises(RuntimeError, match="Portable Chrome"):
+        common.launch_browser_context(p, tmp_path)
+
+    assert popen_calls == [[str(fake_installer)]]
+
+
+def test_launch_browser_context_raises_original_error_when_no_installer_bundled(tmp_path, monkeypatch):
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(common, "find_portable_chrome_executable", lambda: None)
+    monkeypatch.setattr(common, "PORTABLE_CHROME_INSTALLER_PATH", tmp_path / "does-not-exist.exe")
+
+    p = _FakePlaywright([_CHROME_MISSING_EXC])
+
+    with pytest.raises(RuntimeError, match="chrome"):
+        common.launch_browser_context(p, tmp_path)
+
+
+def test_launch_browser_context_does_not_fall_back_for_unrelated_errors(tmp_path, monkeypatch):
     # Chrome kurulu ama BASKA bir sebeple (ör. ag hatasi) basarisiz olursa
-    # Edge'e DUSMEMELI - bu durum "Chrome eksik" degil, farkli bir sorun.
+    # Portable Chrome'a DUSMEMELI - bu durum "Chrome eksik" degil, farkli
+    # bir sorun.
+    monkeypatch.setattr(common.platform, "system", lambda: "Windows")
     unrelated = RuntimeError("net::ERR_NAME_NOT_RESOLVED")
     p = _FakePlaywright([unrelated])
 
     with pytest.raises(RuntimeError, match="ERR_NAME_NOT_RESOLVED"):
         common.launch_browser_context(p, tmp_path)
 
-    assert p.chromium.calls == ["chrome"]
+    assert len(p.chromium.calls) == 1
 
 
 def test_is_profile_lock_error_recognizes_singleton_lock_message():

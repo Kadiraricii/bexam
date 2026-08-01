@@ -213,9 +213,10 @@ def main() -> None:
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        # launch_browser_context: once Chrome dener, kurulu degilse
-        # otomatik Microsoft Edge'e duser, PROFIL KILIDI hatasinda da
-        # bir kez temizleyip yeniden dener - bkz. o fonksiyonun docstring'i.
+        # launch_browser_context: once Chrome dener, Windows'ta kurulu
+        # degilse otomatik Portable Chrome yedegine duser, PROFIL KILIDI
+        # hatasinda da bir kez temizleyip yeniden dener - bkz. o fonksiyonun
+        # docstring'i.
         context = launch_browser_context(p, PROFILE_DIR)
 
         try:

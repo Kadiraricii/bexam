@@ -32,6 +32,7 @@ from common import (
     PROFILE_DIR,
     already_captured_titles,
     derive_course_label,
+    find_scrollable_ancestor_handle,
     is_browser_closed_error,
     launch_browser_context,
     live_url,
@@ -126,6 +127,18 @@ SUBMISSION_ROW_COMPLETE_SELECTOR = ".status-is-complete"
 # aksi halde bir tarafta calisip diger tarafta hicbir satir bulunamayabilir.
 ROW_SELECTOR = "tr, [role='row']"
 
+# Not Defteri satir listesi UZUN oldugunda (bir derste onlarca sinav/odev/
+# tartisma satiri) Blackboard bu tabloyu da ogrenci paneliyle AYNI sekilde
+# virtualize edebiliyor (sadece o an gorunen satirlar DOM'da) - bkz.
+# find_exam_row_names ve _find_row_by_exact_name'deki asagidaki CANLI
+# DOGRULANAN HATA notlari. EXAM_LIST_DISCOVERY_MAX_SCROLL_ITERATIONS
+# (find_exam_row_names - TUM listeyi baştan toplarken) find_student_rows'un
+# 200'uyle, EXAM_ROW_SEARCH_MAX_SCROLL_ITERATIONS (_find_row_by_exact_name -
+# BELIRLI bir satiri ararken) scroll_student_into_view_and_click'in 35'iyle
+# AYNI mantikla secildi (bkz. scan_grade_center.py).
+EXAM_LIST_DISCOVERY_MAX_SCROLL_ITERATIONS = 200
+EXAM_ROW_SEARCH_MAX_SCROLL_ITERATIONS = 35
+
 
 def _first_line(text: str) -> str:
     """text.strip().splitlines()[0] - ama text bos/sadece bosluksa (ör.
@@ -133,6 +146,32 @@ def _first_line(text: str) -> str:
     string doner."""
     lines = text.strip().splitlines()
     return lines[0].strip() if lines else ""
+
+
+def _table_scroll_anchor(page: Page):
+    """Not Defteri tablosunda SU AN DOM'da olan (herhangi bir sinav)
+    ilk satir elemanini dondurur - `None` ise tabloda hic satir yok
+    demektir.
+
+    find_scrollable_ancestor_handle icin tablonun/sayfanin KENDISI degil
+    somut bir eleman saglar - bkz. scan_grade_center._panel_scroll_anchor
+    ile AYNI gerekce: `Locator.evaluate_handle` HER ZAMAN kendi bagli
+    oldugu somut elemani `el` olarak gecirir, `page.evaluate_handle` ise
+    (page bir Locator DEGILSE) hicbir arguman gecirmez."""
+    anchor = page.locator(ROW_SELECTOR).first
+    return anchor if anchor.count() > 0 else None
+
+
+def _find_row_by_exact_name_in_dom(page: Page, row_name: str) -> Locator | None:
+    """_find_row_by_exact_name'in TEK BIR pas (kaydirma denemeden, sadece
+    su anki DOM durumunda) arayan ic kismi - bkz. o fonksiyonun
+    docstring'i."""
+    rows = page.locator(ROW_SELECTOR)
+    for i in range(rows.count()):
+        candidate = rows.nth(i)
+        if _first_line(candidate.inner_text()) == row_name:
+            return candidate
+    return None
 
 
 def _find_row_by_exact_name(page: Page, row_name: str) -> Locator | None:
@@ -152,12 +191,81 @@ def _find_row_by_exact_name(page: Page, row_name: str) -> Locator | None:
     AYRI, bagimsiz bir hata). Cozum: find_exam_row_names'deki YONTEMLE
     AYNI SEKILDE, satirin GERCEK render edilmis inner_text()'ini Python
     tarafinda satir satir karsilastiriyoruz - browser tarafi normalizasyona
-    hic bagimli degil."""
-    rows = page.locator(ROW_SELECTOR)
-    for i in range(rows.count()):
-        candidate = rows.nth(i)
-        if _first_line(candidate.inner_text()) == row_name:
-            return candidate
+    hic bagimli degil.
+
+    IKINCI CANLI HATA (kullanicinin canli gozlemi): 1. sinavdaki TUM
+    ogrenciler yakalandiktan sonra Not Defteri listesine donulup 2.
+    sinavin satiri aranirken, bu fonksiyon SADECE su anki DOM'a bakiyordu.
+    Not Defteri'nde COK sayida satir varsa (bir derste onlarca sinav/odev)
+    Blackboard bu tabloyu da virtualize edebiliyor - 2. sinav henuz DOM'a
+    render edilmemis (listede asagida kalmis) olabilir. Sonuc: satir
+    'bulunamadi' sayilip capture_exam_submissions NotSubmittedOrNotExam
+    firlatiyor, 2. sinav GERCEKTE bir sinav/gonderilmis olsa BILE sessizce
+    atlaniyordu - kullanicinin 'sınav2'ye geçerken buga giriyor, ben GUI'ye
+    girip çıkmam gerekiyor' dedigi durum tam olarak bu (kullanicinin
+    kendi etkilesimi -baska bir sayfaya gecip donmesi- arada bir tarayici
+    reflow/yeniden-render tetikleyip satiri DOM'a sokabiliyordu, bu yuzden
+    "calisir gibi" gorunuyordu). Duzeltme: satir ilk pasoda bulunamazsa,
+    scan_grade_center.py'deki AYNI kanitlanmis yontemle (bir satir
+    ELEMANINDAN yukari dogru en yakin GERCEKTEN kaydirilabilir atayi
+    bulup adim adim kaydirmak) tabloyu asagi kaydirip HER ADIMDA tekrar
+    ariyoruz.
+
+    UCUNCU CANLI HATA (bu duzeltmenin KENDI icinde, ilk yazilan halinde):
+    yukaridaki kaydirma sadece ASAGI yonde ilerliyordu - "su anki konumdan
+    asagi dogru ara" varsayimi return_to_grades_list'in try_back=False
+    (page.goto ile TAM sayfa yenileme, her zaman scroll=0'dan baslar)
+    cagrildigi ANA akista dogruydu, ama return_to_grades_list AYRICA
+    try_back=True (varsayilan) ile de cagriliyor (bkz. gui.py'deki
+    recover() VE scan_course.main()'deki NotSubmittedOrNotExam/genel
+    Exception kurtarmalari) - bu yolda ONCE page.go_back() denenir, TAM
+    YENILEME OLMAYABILIR (tarayici gecmisi/bfcache), yani sayfa onceki
+    kaydirma konumunda KALMIS olabilir. Hedef satir o konumun USTUNDE
+    kalmissa (asagi-sadece arama hicbir zaman ustune cikamayacagi icin)
+    fonksiyon YANLIS SEKILDE 'bulunamadi' donerdi. Duzeltme: kaydirma
+    denemeden ONCE konteyneri EXPLICIT olarak basa (scrollTop=0) sarip
+    oradan asagi ariyoruz - boylece cagrilma anindaki kaydirma
+    konumundan TAMAMEN BAGIMSIZ, HER ZAMAN tum listeyi tarar."""
+    found = _find_row_by_exact_name_in_dom(page, row_name)
+    if found is not None:
+        return found
+
+    anchor = _table_scroll_anchor(page)
+    if anchor is None:
+        return None
+    scroll_handle = find_scrollable_ancestor_handle(anchor)
+    try:
+        if scroll_handle.json_value() is None:
+            return None
+    except Exception:
+        return None
+
+    try:
+        scroll_handle.evaluate("el => { el.scrollTop = 0; }")
+        page.wait_for_timeout(200)
+    except Exception:
+        pass
+    found = _find_row_by_exact_name_in_dom(page, row_name)
+    if found is not None:
+        return found
+
+    for _ in range(EXAM_ROW_SEARCH_MAX_SCROLL_ITERATIONS):
+        try:
+            scroll_handle.evaluate("el => { el.scrollTop += el.clientHeight * 0.8; }")
+        except Exception:
+            break
+        page.wait_for_timeout(200)
+        found = _find_row_by_exact_name_in_dom(page, row_name)
+        if found is not None:
+            return found
+        try:
+            at_bottom = scroll_handle.evaluate(
+                "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 2"
+            )
+        except Exception:
+            break
+        if at_bottom:
+            break
     return None
 
 
@@ -246,43 +354,93 @@ def find_exam_row_names(page: Page) -> tuple[list[ExamRow], list[str]]:
     "bu sayfada ne yapilacagi anlasilamadi" hatasina dusuyordu. Bunun
     yerine (asagidaki excluded_rows'la AYNI yontem) dogrudan satir
     metnine (has_text) gore ariyoruz - hangi eleman turunde render
-    edildiginden bagimsiz calisir."""
-    status_rows = page.locator(ROW_SELECTOR, has_text=GRADING_STATUS_COMPLETE_PATTERN)
+    edildiginden bagimsiz calisir.
+
+    CANLI DOGRULANAN HATA (kullanicinin canli gozlemi): bu fonksiyon
+    eskiden HIC KAYDIRMA yapmiyordu - sadece sayfa ilk yuklendiginde DOM'a
+    gelen satirlara bakiyordu. Bir derste COK sayida satir varsa (onlarca
+    sinav/odev/tartisma) Blackboard bu tabloyu da ogrenci paneliyle AYNI
+    sekilde virtualize edebiliyor - listenin ALT kisimlarindaki sinavlar
+    (kullanicinin bildirdigi "aşağıdaki sınavlar") DOM'a hic girmiyor,
+    sessizce hic bulunamiyordu. Duzeltme: scan_grade_center.find_student_
+    rows ile AYNI yontemle, tabloyu adim adim asagi kaydirip HER ADIMDA
+    tekrar topluyoruz - bu, hem 'Tamamlandı'/'Tümüne Not Verildi' hem
+    'Not verilecek bir şey yok' satirlarini kapsar."""
     included: list[ExamRow] = []
     excluded: list[str] = []
     seen_names: set[str] = set()
-    for i in range(status_rows.count()):
-        row_text = status_rows.nth(i).inner_text()
-        first_line = _first_line(row_text)
-        # ROW_SELECTOR "tr, [role='row']" oldugu icin ayni satir iki kez
-        # eslesebilir (bkz. excluded_rows'daki ayni not) - tekillestiriyoruz.
-        if not first_line or first_line in seen_names:
-            continue
-        seen_names.add(first_line)
-        # bkz. ATTENDANCE_CATEGORY_MARKER tanimindaki not - yoklama ogeleri
-        # durumu 'Tamamlandı' olsa bile denenmeden BASTAN eleniyor.
-        if any(line.strip() == ATTENDANCE_CATEGORY_MARKER for line in row_text.splitlines()):
-            excluded.append(
-                f"{first_line} (kategorisi '{ATTENDANCE_CATEGORY_MARKER}' - yoklama, sınav değil, atlandı)"
-            )
-            continue
-        count_match = SUBMITTED_COUNT_PATTERN.search(row_text)
-        expected_submitted = int(count_match.group(1)) if count_match else None
-        included.append(ExamRow(first_line, expected_submitted))
 
-    # 'Not verilecek bir şey yok' durumu tiklanabilir DEGIL (sadece duz
-    # metin) - bu yuzden satirlari buton/link araciligiyla degil, dogrudan
-    # satir icerigine gore buluyoruz (bkz. ROW_SELECTOR).
-    excluded_rows = page.locator(ROW_SELECTOR, has_text=NOTHING_TO_GRADE_MARKER)
-    for i in range(excluded_rows.count()):
-        row_text = excluded_rows.nth(i).inner_text()
-        first_line = _first_line(row_text)
-        # ROW_SELECTOR "tr, [role='row']" oldugu icin ayni satir hem <tr>
-        # hem onu saran [role='row'] olarak IKI kez eslesebilir - ayni adi
-        # iki kez listeleyip sayaci sisirmemek icin tekillestiriyoruz
-        # (farkli sinavlarin adlari zaten birbirinden farkli).
-        if first_line and first_line not in excluded:
-            excluded.append(first_line)
+    def collect_from_current_dom() -> None:
+        status_rows = page.locator(ROW_SELECTOR, has_text=GRADING_STATUS_COMPLETE_PATTERN)
+        for i in range(status_rows.count()):
+            row_text = status_rows.nth(i).inner_text()
+            first_line = _first_line(row_text)
+            # ROW_SELECTOR "tr, [role='row']" oldugu icin ayni satir iki kez
+            # eslesebilir (bkz. excluded_rows'daki ayni not) VE ayni satir
+            # birden fazla kaydirma adiminda tekrar gorunebilir -
+            # seen_names HER IKI durumu da tekillestirir.
+            if not first_line or first_line in seen_names:
+                continue
+            seen_names.add(first_line)
+            # bkz. ATTENDANCE_CATEGORY_MARKER tanimindaki not - yoklama
+            # ogeleri durumu 'Tamamlandı' olsa bile denenmeden BASTAN
+            # eleniyor.
+            if any(line.strip() == ATTENDANCE_CATEGORY_MARKER for line in row_text.splitlines()):
+                excluded.append(
+                    f"{first_line} (kategorisi '{ATTENDANCE_CATEGORY_MARKER}' - yoklama, sınav değil, atlandı)"
+                )
+                continue
+            count_match = SUBMITTED_COUNT_PATTERN.search(row_text)
+            expected_submitted = int(count_match.group(1)) if count_match else None
+            included.append(ExamRow(first_line, expected_submitted))
+
+        # 'Not verilecek bir şey yok' durumu tiklanabilir DEGIL (sadece duz
+        # metin) - bu yuzden satirlari buton/link araciligiyla degil,
+        # dogrudan satir icerigine gore buluyoruz (bkz. ROW_SELECTOR).
+        excluded_rows = page.locator(ROW_SELECTOR, has_text=NOTHING_TO_GRADE_MARKER)
+        for i in range(excluded_rows.count()):
+            row_text = excluded_rows.nth(i).inner_text()
+            first_line = _first_line(row_text)
+            # ROW_SELECTOR "tr, [role='row']" oldugu icin ayni satir hem
+            # <tr> hem onu saran [role='row'] olarak IKI kez eslesebilir -
+            # ayni adi iki kez listeleyip sayaci sisirmemek icin
+            # tekillestiriyoruz (farkli sinavlarin adlari zaten
+            # birbirinden farkli).
+            if first_line and first_line not in excluded:
+                excluded.append(first_line)
+
+    collect_from_current_dom()
+
+    anchor = _table_scroll_anchor(page)
+    scroll_handle = find_scrollable_ancestor_handle(anchor) if anchor is not None else None
+    try:
+        is_scrollable = scroll_handle is not None and scroll_handle.json_value() is not None
+    except Exception:
+        is_scrollable = False
+
+    if is_scrollable:
+        assert scroll_handle is not None  # is_scrollable garanti eder
+        for _ in range(EXAM_LIST_DISCOVERY_MAX_SCROLL_ITERATIONS):
+            try:
+                scroll_handle.evaluate("el => { el.scrollTop += el.clientHeight * 0.8; }")
+            except Exception:
+                break
+            page.wait_for_timeout(200)
+            collect_from_current_dom()
+            try:
+                at_bottom = scroll_handle.evaluate(
+                    "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 2"
+                )
+            except Exception:
+                break
+            if at_bottom:
+                break
+        try:
+            scroll_handle.evaluate("el => { el.scrollTop = 0; }")
+            page.wait_for_timeout(200)
+        except Exception:
+            pass
+
     return _dedupe_exam_rows(included, excluded)
 
 
@@ -643,8 +801,15 @@ def capture_exam_submissions(
         emit(f"  [{index + 1}/{len(student_rows)}] {display_name}")
         try:
             entry = capture_student(
-                page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
-                exam_name=row_name, roster=roster,
+                page,
+                exam_dir=exam_dir,
+                dom_name=raw_name,
+                occurrence_index=occurrence - 1,
+                display_name=display_name,
+                sidebar_score=sidebar_score,
+                exam_label=exam_label,
+                exam_name=row_name,
+                roster=roster,
             )
             emit(f"    OK  onay={entry['onay']}  puan={entry['puan']}")
             if entry["bozuk_gorsel_sayisi"] > 0:
@@ -738,9 +903,10 @@ def main() -> None:
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        # launch_browser_context: once Chrome dener, kurulu degilse
-        # otomatik Microsoft Edge'e duser, PROFIL KILIDI hatasinda da
-        # bir kez temizleyip yeniden dener - bkz. o fonksiyonun docstring'i.
+        # launch_browser_context: once Chrome dener, Windows'ta kurulu
+        # degilse otomatik Portable Chrome yedegine duser, PROFIL KILIDI
+        # hatasinda da bir kez temizleyip yeniden dener - bkz. o fonksiyonun
+        # docstring'i.
         context = launch_browser_context(p, PROFILE_DIR)
 
         try:

@@ -47,6 +47,7 @@ from common import (
     derive_course_label,
     exact_line_pattern,
     extract_page_info,
+    find_scrollable_ancestor_handle,
     format_student_pdf_stem,
     launch_browser_context,
     load_student_roster,
@@ -260,21 +261,7 @@ def find_scroll_container(page: Page, anchor_text: str):
         anchor = panel.get_by_text(re.compile(re.escape(anchor_text))).first
     if anchor.count() == 0:
         return None
-    handle = anchor.evaluate_handle(
-        """el => {
-            let node = el;
-            while (node && node !== document.body) {
-                const style = getComputedStyle(node);
-                if (node.scrollHeight > node.clientHeight + 4
-                    && /(auto|scroll)/.test(style.overflowY)) {
-                    return node;
-                }
-                node = node.parentElement;
-            }
-            return null;
-        }"""
-    )
-    return handle
+    return find_scrollable_ancestor_handle(anchor)
 
 
 def find_student_rows(page: Page) -> list[tuple[str, str]]:
@@ -384,35 +371,7 @@ def header_matches_student(body_text: str, student_name: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(student_name)}(?!\w)", window) is not None
 
 
-def capture_student(
-    page: Page,
-    dom_name: str,
-    occurrence_index: int,
-    display_name: str,
-    sidebar_score: str,
-    exam_dir: Path,
-    exam_label: str,
-    *,
-    exam_name: str,
-    roster: dict[str, str] | None = None,
-) -> dict:
-    """dom_name: sayfada gorunen ham ad (tiklama + dogrulama icin kullanilir).
-    occurrence_index: bu isimdeki KACINCI ogrenci (0 = ilk) - isim bazli
-    filtrelenmis locator'a gore hesaplanir, aksi halde ayni isimli
-    ogrencilerde yanlis satira tiklanabilir.
-    display_name: ayni isim tekrarlarinda '(2)' gibi ek tasiyan, dosya adi/
-    log icin kullanilan ayirt edici ad.
-    sidebar_score: soldaki listede bu ogrenci icin gorunen not (ör. '50/100') -
-    acilan sayfadaki notla karsilastirilip UCUNCU bir dogrulama katmani
-    olarak kullanilir (ONAY + isim + not ucu birden tutarsa PDF uretilir).
-    exam_name: PDF dosya adinin BASINA gelecek sinav adi (bkz.
-    common.format_student_pdf_stem) - exam_label'dan (dedup/log anahtari
-    icin kullanilir, farkli sekilde formatlanmis olabilir) BILEREK AYRI
-    tutuluyor.
-    roster: {common.normalize_roster_name(ad): ogrenci_no} sozlugu (bkz.
-    common.load_student_roster) - dom_name bu sozlukte bulunursa PDF
-    adina ogrenci numarasi da eklenir, bulunamazsa (ör. 'Öğrenci Tara'
-    hic calistirilmadiysa) o bolum sessizce atlanir."""
+def _find_target_student_rows(panel, dom_name: str):
     # TAM SATIR eslesmesi (exact_line_pattern) - substring eslesme
     # ('AYŞE KAYA' ararken 'AYŞE KAYAALP' satirina da cakisma) hem yanlis
     # ogrenciye tiklanmasina hem de occurrence_index'in kaymasina yol
@@ -421,8 +380,6 @@ def capture_student(
     # sekilde farkliysa (0 eslesme) eski substring davranisina duseriz -
     # yanlis-pozitif riskine ragmen hic tiklayamamaktan iyi, cunku asil
     # guvence zaten tiklama SONRASI icerik dogrulamasi (ONAY + isim + not).
-    panel = _resolve_student_panel(page)
-
     selectors = [
         '[class*="cardWrapper"]',
         '[class*="CardWrapper"]',
@@ -441,9 +398,150 @@ def capture_student(
         rows = panel.get_by_text(exact_line_pattern(dom_name))
     if rows.count() == 0:
         rows = panel.get_by_text(dom_name)
+    return rows
+
+
+def _panel_scroll_anchor(panel):
+    """Panel icinde SU AN DOM'da olan (herhangi bir isimde) ilk satir
+    elemanini dondurur - `None` ise panelde hic satir yok demektir.
+
+    Bu, `_scrollable_ancestor_handle` icin PANELIN KENDISI yerine somut
+    bir eleman saglar (bkz. scroll_student_into_view_and_click'teki IKINCI
+    CANLI DOGRULANAN HATA notu): `panel` bir Locator DEGIL `page`'in
+    KENDISI olsa bile (STUDENT_LIST_PANEL_SELECTOR/PANEL_FALLBACK_SELECTOR
+    hicbirine uymadigi fallback durumunda), `panel.locator(...)` YINE DE
+    sayfada eslesen SOMUT bir elemana baglı bir Locator dondurur - bu
+    yuzden panelin kendisinin turu (Locator ya da Page) fark etmeksizin
+    guvenle calisir."""
+    selectors = [
+        '[class*="cardWrapper"]',
+        '[class*="CardWrapper"]',
+        '[class*="userCard"]',
+        '[role="button"]',
+        'button',
+        '[role="option"]',
+        '[role="listitem"]',
+        '[role="treeitem"]',
+        '[role="menuitem"]',
+    ]
+    anchor = panel.locator(", ".join(selectors)).first
+    return anchor if anchor.count() > 0 else None
+
+
+def scroll_student_into_view_and_click(page: Page, dom_name: str, occurrence_index: int = 0) -> None:
+    """Sol 'Öğrenciler' panelindeki hedef öğrenciyi bulur ve tıklar.
+
+    Öğrenci alt taraflarda kaldığı için henüz DOM'da veya görünür alanda
+    olmayabilir - sol paneli aşağı doğru kademeli kaydırarak öğrencinin
+    görünür alana ve DOM'a yüklenmesini sağlar. Öğrenci bulunduğunda
+    scroll_into_view_if_needed ile ekrana getirip tıklar.
+
+    CANLI DOGRULANAN HATA (kullanicinin canli gozlemi): eski surum,
+    panelin KENDISININ (role="menu" olan `<ul>`) kaydirilabilir oldugunu
+    VARSAYIP dogrudan onun uzerinde `el.scrollTop += ...` yapiyordu. Ama
+    gercek kaydirma cogu zaman bu elemanin bir UST atasinda oluyor -
+    semantik `<ul>` kendisi scrollable OLMAYABILIR, gercek overflow:auto/
+    scroll bir SARMALAYICI div'de olabilir. Bu durumda programatik
+    scrollTop atamasinin HICBIR ETKISI olmuyordu: panel gorsel olarak
+    hic degismiyor, hedef ogrenci asla DOM'a/gorunur alana gelmiyordu -
+    tam olarak kullanicinin bildirdigi gibi, otomatik kaydirma calismiyor
+    ama KENDISI fare ile kaydirinca calisiyordu (gercek tarayici
+    kaydirmasi dogru - GERCEKTEN scrollable olan - atayi hedefliyor).
+    find_scroll_container'daki AYNI, kanitlanmis "yukari dogru en yakin
+    GERCEKTEN kaydirilabilir atayi bul" mantigi burada da kullaniliyor.
+
+    IKINCI CANLI DOGRULANAN HATA (bu fonksiyonun ONCEKI surumunde,
+    yukaridaki duzeltmeden SONRA bile devam etti): kaydirma denemesi
+    `panel.evaluate_handle(...)` ile PANELIN KENDISINDEN baslatiliyordu.
+    `_resolve_student_panel` iki bilinen selector'dan HICBIRINE uymazsa
+    (ör. Blackboard bir A/B test / surum farkiyla beklenmedik bir DOM
+    verirse) panel degeri bir Locator DEGIL, dogrudan `page` nesnesinin
+    KENDISI oluyordu (bkz. _resolve_student_panel). `page.evaluate_handle`
+    bu durumda JS fonksiyonuna HICBIR arguman GECMEZ - `el` sessizce
+    `undefined` kalir, dongu hic girmeden `null` doner, `is_scrollable`
+    HER ZAMAN False sayilir ve panel BIR KEZ BILE OTOMATIK KAYDIRILMAZ.
+    Ekranda bunun karsiligi tam olarak kullanicinin bildirdigi durumdu:
+    sinav icerigi/skor alani (AUTO_SCROLL_JS ile ayri capture_current_page
+    asamasinda) asagi kayarken sol "Öğrenciler" listesi HIC kaymiyor,
+    sonraki ogrenci bulunamiyor (RuntimeError) - kullanici PANELI ELINDEN
+    kendi faresiyle kaydirinca (o an DOM'a giren ogrenci sayesinde) bir
+    SONRAKI ogrencide tarama tekrar "calisir" gorunuyordu. Duzeltme: artik
+    panelin KENDISI degil, panel icinde O AN GORUNEN GERCEK bir satir
+    (herhangi biri - _panel_scroll_anchor) baslangic noktasi aliniyor.
+    Bu, `Locator.evaluate_handle`'in DAIMA kendi bagli oldugu SOMUT elemani
+    `el` olarak gectigini garanti eder - panel bir Locator olsun ya da
+    (fallback'te) `page`'in kendisi olsun FARK ETMEZ, cunku artik hicbir
+    yerde `panel.evaluate_handle` cagrilmiyor.
+    """
+    panel = _resolve_student_panel(page)
+    rows = _find_target_student_rows(panel, dom_name)
+
+    if rows.count() <= occurrence_index:
+        scroll_anchor = _panel_scroll_anchor(panel)
+        scroll_handle = find_scrollable_ancestor_handle(scroll_anchor) if scroll_anchor is not None else None
+        try:
+            is_scrollable = scroll_handle is not None and scroll_handle.json_value() is not None
+        except Exception:
+            is_scrollable = False
+
+        if is_scrollable:
+            assert scroll_handle is not None  # is_scrollable garanti eder
+            for _ in range(35):
+                scroll_handle.evaluate("el => { el.scrollTop += el.clientHeight * 0.75; }")
+                page.wait_for_timeout(200)
+                rows = _find_target_student_rows(panel, dom_name)
+                if rows.count() > occurrence_index:
+                    break
+
+    rows = _find_target_student_rows(panel, dom_name)
+    if rows.count() == 0:
+        raise RuntimeError(f"'{dom_name}' isimli öğrenci sol listede bulunamadı (panel kaydırıldı ama bulunamadı)")
 
     safe_index = min(occurrence_index, max(rows.count() - 1, 0))
-    rows.nth(safe_index).click()
+    target = rows.nth(safe_index)
+
+    try:
+        target.scroll_into_view_if_needed(timeout=2000)
+    except Exception:
+        pass
+
+    target.click()
+
+
+def capture_student(
+    page: Page,
+    *,
+    exam_dir: Path,
+    dom_name: str,
+    occurrence_index: int,
+    display_name: str,
+    sidebar_score: str = "",
+    exam_name: str = "",
+    exam_label: str = "",
+    roster: dict[str, str] | None = None,
+) -> dict:
+    """dom_name: sayfada gorunen ham ad (tiklama + dogrulama icin kullanilir).
+    occurrence_index: bu isimdeki KACINCI ogrenci (0 = ilk) - isim bazli
+    filtrelenmis locator'a gore hesaplanir, aksi halde ayni isimli
+    ogrencilerde yanlis satira tiklanabilir.
+    display_name: ayni isim tekrarlarinda '(2)' gibi ek tasiyan, dosya adi/
+    log icin kullanilan ayirt edici ad.
+    sidebar_score: soldaki listede bu ogrenci icin gorunen not (ör. '50/100') -
+    acilan sayfadaki notla karsilastirilip UCUNCU bir dogrulama katmani
+    olarak kullanilir (ONAY + isim + not ucu birden tutarsa PDF uretilir).
+    exam_name: PDF dosya adinin BASINA gelecek sinav adi (bkz.
+    common.format_student_pdf_stem) - exam_label'dan (dedup/log anahtari
+    icin kullanilir, farkli sekilde formatlanmis olabilir) BILEREK AYRI
+    tutuluyor.
+    roster: {common.normalize_roster_name(ad): ogrenci_no} sozlugu (bkz.
+    common.load_student_roster) - dom_name bu sozlukte bulunursa PDF
+    adina ogrenci numarasi da eklenir, bulunamazsa (ör. 'Öğrenci Tara'
+    hic calistirilmadiysa) o bolum sessizce atlanir.
+
+    Doner: capture_current_page'in dondurdugu KAYIT (dict) - "onay",
+    "puan", "pdf", "bozuk_gorsel_sayisi" gibi anahtarlar icerir (cagiran
+    tarafin - ör. gui.py - entry['onay'] gibi eristigi tam olarak bu)."""
+    scroll_student_into_view_and_click(page, dom_name, occurrence_index)
 
     time.sleep(random.uniform(MIN_CLICK_DELAY_S, MAX_CLICK_DELAY_S))
 
@@ -522,9 +620,10 @@ def main() -> None:
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        # launch_browser_context: once Chrome dener, kurulu degilse
-        # otomatik Microsoft Edge'e duser, PROFIL KILIDI hatasinda da
-        # bir kez temizleyip yeniden dener - bkz. o fonksiyonun docstring'i.
+        # launch_browser_context: once Chrome dener, Windows'ta kurulu
+        # degilse otomatik Portable Chrome yedegine duser, PROFIL KILIDI
+        # hatasinda da bir kez temizleyip yeniden dener - bkz. o fonksiyonun
+        # docstring'i.
         context = launch_browser_context(p, PROFILE_DIR)
 
         try:
@@ -581,8 +680,15 @@ def main() -> None:
                 print(f"Yakalaniyor [{row_index + 1}/{len(student_rows)}]: {display_name} (not: {sidebar_score})")
                 try:
                     entry = capture_student(
-                        page, raw_name, occurrence - 1, display_name, sidebar_score, exam_dir, exam_label,
-                        exam_name=exam_label, roster=roster,
+                        page,
+                        exam_dir=exam_dir,
+                        dom_name=raw_name,
+                        occurrence_index=occurrence - 1,
+                        display_name=display_name,
+                        sidebar_score=sidebar_score,
+                        exam_label=exam_label,
+                        exam_name=exam_label,
+                        roster=roster,
                     )
                     print(f"  -> OK  onay={entry['onay']}  puan={entry['puan']}  pdf={entry['pdf']}")
                     if entry["bozuk_gorsel_sayisi"] > 0:

@@ -5,7 +5,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from playwright.sync_api import BrowserContext
 
@@ -16,6 +16,33 @@ PROFILE_DIR = ROOT_DIR / ".state" / "profile"
 LOG_PATH = ROOT_DIR / ".state" / "captures.json"
 OUTPUT_DIR = ROOT_DIR / "output"
 ONBOARDING_SEEN_PATH = ROOT_DIR / ".state" / "onboarding_seen"
+
+# Portable Chrome yedegi - SADECE Windows icin (bkz. launch_browser_context
+# docstring'i): macOS'ta "Portable Chrome" diye ayri/resmi bir urun yok
+# (Mac uygulamalari zaten .app paketi olarak kendi kendine yetiyor) - bu
+# yuzden macOS'ta Chrome bulunamazsa dogrudan "Chrome'u kur" mesaji
+# gosterilmeye devam ediliyor. Windows'ta ise Chrome HER makinede hazir
+# gelmiyor - IKI FARKLI kaynaktan biri kullanilabilir, SIRAYLA denenir
+# (bkz. find_portable_chrome_executable):
+#
+# 1) BUNDLED_PORTABLE_CHROME_DIR: PortableApps.com'un TAM/hazir
+#    "GoogleChromePortable" klasorunun proje kokune DOGRUDAN eklenmis
+#    kopyasi - internet indirmesi GEREKTIRMEZ, proje klasoruyle birlikte
+#    (git DISINDA, ör. zip/USB ile) dagitildiginda ANINDA calisir. Tek
+#    basina 200MB+ olan chrome.dll GitHub'in 100MB'lik sert dosya
+#    sinirini astigi icin bu klasor GIT'E KOMMIT EDILMEZ (bkz.
+#    .gitignore) - SADECE proje klasorunun kendisiyle (git disi bir
+#    yontemle) tasinmasi beklenir.
+# 2) PORTABLE_CHROME_DIR: PORTABLE_CHROME_INSTALLER_PATH'teki kucuk
+#    (~1.5MB) "online" kurulum dosyasinin (GERCEK Chrome'u ilk
+#    calistirmada internetten indirir) kullanicinin makinesinde
+#    KURULMASI sonucu olusan hedef klasor - (1) mevcut degilse (ör.
+#    proje sadece kaynak kodu olarak, GoogleChromePortable/ OLMADAN
+#    paylasilmissa) yedek olarak kullanilir.
+VENDOR_DIR = ROOT_DIR / "vendor"
+BUNDLED_PORTABLE_CHROME_DIR = ROOT_DIR / "GoogleChromePortable"
+PORTABLE_CHROME_DIR = VENDOR_DIR / "portable_chrome"
+PORTABLE_CHROME_INSTALLER_PATH = VENDOR_DIR / "GoogleChromePortable_installer.exe"
 
 # CANLI DOGRULANAN HATA: Blackboard'un "Cevrimici Test" (Quiz, ör.
 # "Çoktan Seçmeli"/otomatik notlandirilan sinavlar) DEGERLENDIRME
@@ -815,6 +842,46 @@ def page_on_blackboard(page) -> bool:
         return False
 
 
+# scan_grade_center.py (ogrenci paneli) VE scan_course.py (Not Defteri
+# sinav listesi) arasinda PAYLASILAN "bu elemandan yukari dogru en yakin
+# GERCEKTEN kaydirilabilir atayi bul" mantigi - Blackboard Ultra'nin farkli
+# sayfalarindaki UZUN/virtualized listeler (ogrenci paneli, sinav satirlari)
+# AYNI kalibi kullaniyor: semantik konteynerin (ör. <ul role="menu">,
+# <table>) KENDISI degil, bir SARMALAYICI atasi scrollable oluyor. Tek
+# kaynaktan gelmesi, iki sayfa arasinda mantigin birbirinden AYRI/tutarsiz
+# davranmasini onluyor (bkz. scan_grade_center.scroll_student_into_view_
+# and_click'teki CANLI DOGRULANAN HATA notu: PANELIN KENDISINDEN degil,
+# panel icindeki SOMUT bir elemandan baslatilmasi gerektigi).
+FIND_SCROLLABLE_ANCESTOR_JS = """el => {
+    let node = el;
+    while (node && node !== document.body) {
+        const style = getComputedStyle(node);
+        if (node.scrollHeight > node.clientHeight + 4
+            && /(auto|scroll)/.test(style.overflowY)) {
+            return node;
+        }
+        node = node.parentElement;
+    }
+    return null;
+}"""
+
+
+def find_scrollable_ancestor_handle(anchor):
+    """anchor (belirli bir DOM elemanina baglı bir Locator) icin yukari
+    dogru en yakin kaydirilabilir atayi dondurur (bulamazsa alttaki JS
+    degeri `null` olan bir JSHandle doner - `.json_value() is None` ile
+    kontrol edilmeli).
+
+    anchor'un HER ZAMAN (aranan listenin/panelin KENDISI DEGIL) somut bir
+    eleman olmasi kritik: `Locator.evaluate_handle` HER ZAMAN kendi bagli
+    oldugu somut elemani `el` olarak gecirir - ama cagiran taraf yanlislikla
+    `page`'in KENDISINI (bir Locator DEGIL) bu fonksiyona verirse,
+    `Page.evaluate_handle` JS fonksiyonuna HICBIR arguman GECMEZ (`el`
+    sessizce `undefined` kalir, dongu hic calismadan `null` doner) - bkz.
+    scan_grade_center.py'deki CANLI DOGRULANAN HATA notu."""
+    return anchor.evaluate_handle(FIND_SCROLLABLE_ANCESTOR_JS)
+
+
 BROWSER_CLOSED_ERROR_MARKERS = (
     "target closed",
     "target page, context or browser has been closed",
@@ -937,39 +1004,12 @@ CHROME_MISSING_ERROR_MARKERS = (
 
 def is_chrome_missing_error(exc_or_message: BaseException | str) -> bool:
     """Tarayici-acma hatasinin, makinede Google Chrome kurulu olmamasindan
-    kaynaklanip kaynaklanmadigini tahmin eder. Kasitli olarak SADECE
-    'chrome' kanalina ozel - launch_browser_context bunu, Edge'e DUSUP
-    dusmeyecegine karar vermek icin kullanir (bkz. o fonksiyonun
-    docstring'i)."""
+    kaynaklanip kaynaklanmadigini tahmin eder. launch_browser_context bunu,
+    Windows'ta Portable Chrome yedegine DUSUP dusmeyecegine (macOS/Linux'ta
+    ise dogrudan "Chrome'u kur" hatasini yukari firlatip firlatmayacagina)
+    karar vermek icin kullanir (bkz. o fonksiyonun docstring'i)."""
     message = str(exc_or_message).lower()
     return any(marker in message for marker in CHROME_MISSING_ERROR_MARKERS)
-
-
-# is_chrome_missing_error'dan FARKLI olarak, KANGI kanal (chrome/msedge)
-# olursa olsun "bu tarayici makinede kurulu degil" hatasini genel olarak
-# taniyan kalip - Playwright ayni "Chromium distribution 'X' is not
-# found ... Run \"playwright install X\"" bicimini HER kanal icin
-# kullaniyor, sadece X degisiyor. launch_browser_context Chrome'u
-# deneyip basarisiz olursa Edge'e duser (bkz. asagisi); EDGE DE
-# bulunamazsa kullaniciya "ikisi de kurulu degil" gibi net bir mesaj
-# gosterebilmek icin bu genel kontrol gui.py'de kullanilir.
-BROWSER_MISSING_ERROR_MARKERS = (
-    "is not found at",
-    'run "playwright install',
-    "executable doesn't exist",
-    "executable does not exist",
-    "cannot find",
-    "no browser binary",
-    "failed to launch",
-)
-
-
-def is_browser_missing_error(exc_or_message: BaseException | str) -> bool:
-    """Tarayici-acma hatasinin, denenen KANALIN (chrome ya da msedge)
-    makinede kurulu olmamasindan kaynaklanip kaynaklanmadigini tahmin
-    eder - is_chrome_missing_error'un aksine kanaldan bagimsizdir."""
-    message = str(exc_or_message).lower()
-    return any(marker in message for marker in BROWSER_MISSING_ERROR_MARKERS)
 
 
 def check_output_writable(output_dir: Path) -> str | None:
@@ -1002,17 +1042,18 @@ DEFAULT_WINDOW_WIDTH = 1440
 DEFAULT_WINDOW_HEIGHT = 900
 
 
-def browser_launch_kwargs(channel: str = "chrome") -> dict:
+def browser_launch_kwargs(channel: str | None = "chrome", executable_path: Path | str | None = None) -> dict:
     """Tarayici penceresini makul, sabit bir boyutta acmak icin ortak
     launch ayarlari.
 
-    channel: "chrome" (varsayilan) ya da "msedge" - bkz.
-    launch_browser_context docstring'i: makinede Google Chrome kurulu
-    degilse otomatik olarak Microsoft Edge'e dusuluyor. Edge de Chromium
-    tabanli GERCEK bir tarayici oldugu icin asagidaki otomasyon-tespiti
-    onlemleri (channel + --disable-blink-features + ignore_default_args)
-    Chrome ile AYNI sekilde gecerli kaliyor - ikisi de ayni alt yapiyi
-    (Chromium) paylasiyor, sadece marka/kanal farkli.
+    channel/executable_path BIRBIRINI DISLAR (Playwright ikisi birden
+    verilirse hata firlatir): normal akista channel="chrome" kullanilir;
+    Windows'ta Chrome bulunamayip Portable Chrome yedegine dusuldugunde
+    (bkz. launch_browser_context) executable_path GERCEK chrome.exe
+    yoluna ayarlanir ve channel=None birakilir. Portable Chrome de
+    ozunde AYNI Google Chrome ikili dosyasi oldugu icin asagidaki
+    otomasyon-tespiti onlemleri (args + ignore_default_args) HER IKI
+    durumda da ayni sekilde gecerli kaliyor.
 
     Once ekran cozunurlugune gore tam ekran acmayi denedik, ama Blackboard'un
     kendi sayfasi sabit/dar bir genislikte kaliyor - pencereyi ekrana gore
@@ -1055,8 +1096,7 @@ def browser_launch_kwargs(channel: str = "chrome") -> dict:
     ile karistirilmamali: o SADECE "Chrome otomatik test yazilimiyla
     kontrol ediliyor" cubugunu gizliyor, sandbox'la ilgisi yok.
     """
-    return {
-        "channel": channel,
+    kwargs: dict[str, Any] = {
         "viewport": {"width": DEFAULT_WINDOW_WIDTH, "height": DEFAULT_WINDOW_HEIGHT},
         "chromium_sandbox": True,
         "args": [
@@ -1067,40 +1107,64 @@ def browser_launch_kwargs(channel: str = "chrome") -> dict:
         ],
         "ignore_default_args": ["--enable-automation"],
     }
+    if executable_path is not None:
+        kwargs["executable_path"] = str(executable_path)
+    else:
+        kwargs["channel"] = channel
+    return kwargs
+
+
+def find_portable_chrome_executable() -> Path | None:
+    """BUNDLED_PORTABLE_CHROME_DIR VE PORTABLE_CHROME_DIR altinda (bu
+    SIRAYLA, herhangi bir derinlikte) bir "chrome.exe" arar, ilk bulunani
+    doner - hicbirinde bulamazsa (ya da ikisi de yoksa) None doner.
+
+    BUNDLED_PORTABLE_CHROME_DIR ONCE denenir: proje kokune DOGRUDAN
+    eklenmis, zaten hazir/calisir durumdaki kopya - kurulum/internet
+    indirmesi beklemeden ANINDA kullanilabilir. PORTABLE_CHROME_DIR
+    (kucuk online kurulumun kurulum HEDEFI) sadece bundled kopya mevcut
+    degilse denenir.
+
+    SADECE Windows'ta anlamli: "Portable Chrome" diye ayri/resmi bir
+    urun macOS/Linux'ta yok (bkz. bu iki degiskenin tanimindaki not) -
+    bu yuzden diger platformlarda HER ZAMAN None donup Chrome eksikse
+    dogrudan "Chrome'u kur" hatasina dusuluyor."""
+    if platform.system() != "Windows":
+        return None
+    for candidate_dir in (BUNDLED_PORTABLE_CHROME_DIR, PORTABLE_CHROME_DIR):
+        if not candidate_dir.exists():
+            continue
+        try:
+            matches = sorted(candidate_dir.rglob("chrome.exe"))
+        except OSError:
+            continue
+        if matches:
+            return matches[0]
+    return None
 
 
 def launch_browser_context(p, profile_dir: Path) -> BrowserContext:
-    """Kalici profille bir tarayici baglami acar - once Google Chrome'u
-    dener, makinede kurulu degilse otomatik olarak Microsoft Edge'e
-    (channel="msedge") duser. Ikisi de PROFIL KILIDI hatasina karsi bir
-    kez temizleyip yeniden deniyor (bkz. clear_stale_profile_lock).
+    """Kalici profille bir tarayici baglami acar - Google Chrome'u dener;
+    Windows'ta Chrome kurulu degilse SIRAYLA (1) daha once kurulmus bir
+    Portable Chrome'u (bkz. find_portable_chrome_executable), (2) o da
+    yoksa - projeye eklenen kurulum dosyasi varsa - o kurulumu ACIP
+    kullaniciyi bilgilendiren bir hata firlatmayi dener. macOS/Linux'ta
+    boyle bir yedek YOK - Chrome bulunamazsa dogrudan orijinal hata
+    yukari firlatilir (kullaniciya "Chrome'u kur" mesaji gosterilir,
+    bkz. gui.py browser_error isleme).
 
-    CANLI ISTEK (kullanici): bazi bilgisayarlarda Google Chrome kurulu
-    olmuyor ama Microsoft Edge (Windows'ta VARSAYILAN olarak hazir gelir)
-    kurulu oluyor - onceden boyle bir makinede program SADECE "Chrome'u
-    kur" diyen bir hata verip tamamen kullanilamaz durumda kaliyordu.
-    Edge de Chromium tabanli GERCEK bir tarayici oldugu icin (bkz.
-    browser_launch_kwargs docstring'i) ayni otomasyon-tespiti onlemleri
-    ayni sekilde gecerli - SSO akisi acisindan Chrome'dan farkli bir risk
-    tasimiyor.
+    Her deneme PROFIL KILIDI hatasina karsi bir kez temizleyip yeniden
+    deniyor (bkz. clear_stale_profile_lock).
 
     Bu fonksiyon eskiden gui.py/scan_course.py/scan_grade_center.py/
     capture.py/scan_students.py'de AYNI (Chrome + profil-kilidi-yeniden-
-    deneme) mantigi 5 KEZ tekrarlanan koddan cikarildi - Edge-fallback'i
-    5 ayri yerde ayri ayri eklemek yerine, TEK bir yerde eklenip her
-    cagiran tarafin otomatik olarak faydalanmasi icin.
+    deneme) mantigi 5 KEZ tekrarlanan koddan cikarildi - Portable Chrome
+    yedegini 5 ayri yerde ayri ayri eklemek yerine, TEK bir yerde
+    eklenip her cagiran tarafin otomatik olarak faydalanmasi icin."""
 
-    Chrome DA Edge DE bulunamazsa (is_chrome_missing_error/
-    is_browser_missing_error), en sondaki (Edge denemesinden gelen)
-    istisna oldugu gibi yukari firlatilir - cagiran taraf (gui.py) bunu
-    is_browser_missing_error ile yakalayip kullaniciya net bir mesaj
-    gosterir."""
-
-    def _launch(channel: str) -> BrowserContext:
+    def _launch_with_kwargs(kwargs: dict) -> BrowserContext:
         try:
-            return p.chromium.launch_persistent_context(
-                str(profile_dir), headless=False, **browser_launch_kwargs(channel=channel)
-            )
+            return p.chromium.launch_persistent_context(str(profile_dir), headless=False, **kwargs)
         except Exception as exc:
             # Sadece PROFIL KILIDI hatasindan sonra (zorla kapatma/coke
             # sonrasi yetim SingletonLock) temizleyip bir kez daha
@@ -1108,16 +1172,41 @@ def launch_browser_context(p, profile_dir: Path) -> BrowserContext:
             if not is_profile_lock_error(exc):
                 raise
             clear_stale_profile_lock(profile_dir)
-            return p.chromium.launch_persistent_context(
-                str(profile_dir), headless=False, **browser_launch_kwargs(channel=channel)
-            )
+            return p.chromium.launch_persistent_context(str(profile_dir), headless=False, **kwargs)
 
     try:
-        return _launch("chrome")
+        return _launch_with_kwargs(browser_launch_kwargs(channel="chrome"))
     except Exception as exc:
-        if not is_chrome_missing_error(exc):
+        if not is_chrome_missing_error(exc) or platform.system() != "Windows":
             raise
-        return _launch("msedge")
+
+        portable_chrome = find_portable_chrome_executable()
+        if portable_chrome is not None:
+            return _launch_with_kwargs(browser_launch_kwargs(executable_path=portable_chrome))
+
+        # Portable Chrome HENUZ kurulu degil - ama projeye eklenen kurulum
+        # dosyasi varsa, kullaniciya ekstra bir adim yaptirmadan (dosyayi
+        # KENDI bulup calistirma zahmeti olmadan) dogrudan ACIYORUZ. Bu
+        # SESSIZ/otomatik bir kurulum DEGIL (subprocess.Popen sadece
+        # normal kurulum sihirbazini gosterir, kullanici hedef klasoru
+        # kendisi onaylar) - Playwright'tan Windows'a ozel bir NSIS
+        # kurulumunu SESSIZCE calistirmayi burada bilerek denemedik,
+        # cunku bu makinede (macOS) test edilemiyor; gercek sihirbazi
+        # gostermek, yanlis/eksik bir sessiz-kurulum bayragi tahmin edip
+        # kullaniciyi belirsiz bir durumda birakmaktan daha guvenli.
+        if PORTABLE_CHROME_INSTALLER_PATH.exists():
+            try:
+                subprocess.Popen([str(PORTABLE_CHROME_INSTALLER_PATH)])
+            except OSError:
+                pass
+            raise RuntimeError(
+                "Google Chrome bulunamadı. Az önce açılan Portable Chrome "
+                f"kurulum sihirbazında hedef klasör olarak şunu seç: "
+                f"{PORTABLE_CHROME_DIR}\nKurulum bitince 'Tarayıcıyı Aç'a "
+                "tekrar bas."
+            ) from exc
+
+        raise
 
 
 def derive_course_label(page) -> str:

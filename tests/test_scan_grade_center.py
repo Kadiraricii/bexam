@@ -9,7 +9,9 @@ Ikisi de bu oturumda bulunan gercek hata siniflarinin regresyon testleri:
   sayfasini da 'dogru' saymasi (yanlis ogrenciye yanlis PDF riski).
 """
 
-from scan_grade_center import _merge_scroll_window, header_matches_student
+import inspect
+
+from scan_grade_center import _merge_scroll_window, capture_student, header_matches_student
 
 # Testlerde kullanilan duz metin - scan_grade_center.SUBMIT_DATE_MARKER_PATTERN
 # (regex + re.IGNORECASE) bunu BUYUK/KUCUK harf farketmeksizin eslemeli, bkz.
@@ -119,3 +121,42 @@ def test_header_matches_student_accepts_sentence_case_marker():
     body = "Degerlendirme\nYUNUS AKSU\nGönderim tarihi: 18.03.2026 17:29\nOnay: abc123"
 
     assert header_matches_student(body, "YUNUS AKSU") is True
+
+
+# ---------- capture_student imzasi / cagiran taraflarla tutarlilik ----------
+
+
+def test_capture_student_accepts_all_keywords_used_by_its_callers():
+    # CANLI DOGRULANAN HATA: capture_student'in imzasi bir refactor
+    # sirasinda degisip (page disinda HER SEY keyword-only olup) ama
+    # gui.py/scan_course.py/scan_grade_center.py'deki UC cagiran taraf
+    # hala ESKI pozisyonel sekilde cagiriyordu - ilk gercek calistirmada
+    # (herhangi bir ogrenci PDF'i alinmaya calisildiginda) TypeError ile
+    # COKUYORDU, yani PDF indirme TAMAMEN kirikti. Bu, tespit edilmesi
+    # gercek bir tarama calistirmadan COK ZAMAN alan bir hataydi. Bu test
+    # capture_student'in, UC cagiran tarafin da kullandigi TUM keyword
+    # adlarini KABUL ETTIGINI - gercek bir Playwright sayfasi/tarayici
+    # gerektirmeden, sadece Python imzasi uzerinden - dogrular. Imza
+    # tekrar degisip cagiran taraflar guncellenmezse bu test HEMEN
+    # (gercek bir tarama denemeden) kirmizi olur.
+    sig = inspect.signature(capture_student)
+    used_by_callers = {
+        "exam_dir", "dom_name", "occurrence_index", "display_name",
+        "sidebar_score", "exam_label", "exam_name", "roster",
+    }
+
+    accepted = set(sig.parameters)
+    assert used_by_callers.issubset(accepted), accepted
+
+    # "page" disindaki HICBIR parametre pozisyonel-ZORUNLU (yani `*`
+    # isaretinden ONCE) olmamali - cagiran taraflar hepsini keyword
+    # olarak veriyor, biri yanlislikla pozisyonel-zorunlu kalirsa (ör.
+    # bu testin kendisi gibi) `capture_student(page, exam_dir=..., ...)`
+    # cagrisi yine patlar.
+    for name, param in sig.parameters.items():
+        if name == "page":
+            continue
+        assert param.kind in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ), f"{name} parametresi keyword olarak verilebilir olmali"
