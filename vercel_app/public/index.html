@@ -6,23 +6,25 @@
   <title>BB Sınav Yakalayıcı - Bulut Canlı Görünüm</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b0f19;
-      --card-bg: rgba(23, 32, 54, 0.75);
-      --card-border: rgba(255, 255, 255, 0.12);
+      --bg: #05070d;
+      --card-bg: rgba(20, 27, 46, 0.72);
+      --card-border: rgba(255, 255, 255, 0.10);
       --text: #f8fafc;
-      --muted: #94a3b8;
+      --muted: #8b96ad;
       --primary: #3b82f6;
+      --primary-2: #8b5cf6;
       --primary-hover: #2563eb;
       --primary-soft: rgba(59, 130, 246, 0.15);
-      --primary-glow: rgba(59, 130, 246, 0.4);
+      --primary-glow: rgba(59, 130, 246, 0.45);
       --success: #22c55e;
       --warning: #f59e0b;
       --warning-soft: rgba(245, 158, 11, 0.15);
       --warning-text: #fef3c7;
       --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.35);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
@@ -34,10 +36,34 @@
       display: flex;
       flex-direction: column;
       overflow-x: hidden;
-      background-image: 
-        radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.18) 0px, transparent 55%),
-        radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.18) 0px, transparent 55%),
-        radial-gradient(at 50% 50%, rgba(16, 185, 129, 0.08) 0px, transparent 65%);
+      position: relative;
+    }
+
+    /* Atmosfer: kaba mesh gradyan + ince nokta izgara + tane (grain) dokusu -
+       duz koyu bir arkaplan yerine derinlik hissi veren katmanli bir zemin. */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        radial-gradient(at 15% 10%, rgba(59, 130, 246, 0.20) 0px, transparent 50%),
+        radial-gradient(at 85% 85%, rgba(139, 92, 246, 0.20) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(16, 185, 129, 0.06) 0px, transparent 65%),
+        linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+      background-size: auto, auto, auto, 42px 42px, 42px 42px;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0.35;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
     }
 
     .container {
@@ -45,192 +71,254 @@
       margin: 0 auto;
       padding: 24px;
       width: 100%;
+      position: relative;
+      z-index: 1;
     }
 
-    /* Auth Screen */
+    /* ---------- Auth Screen ---------- */
     .auth-wrapper {
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 90vh;
+      min-height: 100vh;
       padding: 20px;
       position: relative;
+      z-index: 1;
     }
 
-    /* Ambient Glowing Orbs */
     .orb {
       position: absolute;
       border-radius: 50%;
-      filter: blur(80px);
+      filter: blur(90px);
       z-index: 0;
       pointer-events: none;
-      animation: floatOrb 10s infinite ease-in-out alternate;
+      animation: floatOrb 12s infinite ease-in-out alternate;
     }
-    .orb-1 { width: 300px; height: 300px; background: rgba(59, 130, 246, 0.25); top: 15%; left: 20%; }
-    .orb-2 { width: 250px; height: 250px; background: rgba(139, 92, 246, 0.25); bottom: 15%; right: 20%; animation-delay: -5s; }
+    .orb-1 { width: 340px; height: 340px; background: rgba(59, 130, 246, 0.28); top: 10%; left: 12%; }
+    .orb-2 { width: 300px; height: 300px; background: rgba(139, 92, 246, 0.26); bottom: 10%; right: 14%; animation-delay: -6s; }
+    .orb-3 { width: 220px; height: 220px; background: rgba(16, 185, 129, 0.16); top: 55%; left: 50%; animation-delay: -3s; }
 
     @keyframes floatOrb {
       0% { transform: translate(0, 0) scale(1); }
-      100% { transform: translate(30px, -20px) scale(1.1); }
+      100% { transform: translate(34px, -26px) scale(1.12); }
     }
+
+    /* Kart cevresinde yavasca donen degrade "glow" cercevesi - premium
+       login ekranlarinda siklikla gorulen, dikkat cekici ama abartisiz
+       bir odak efekti. Kartin KENDISI degil, arka planindaki bir katman
+       donuyor (transform - compositor-friendly). */
+    .auth-card-frame {
+      position: relative;
+      z-index: 10;
+      width: 100%;
+      max-width: 460px;
+      border-radius: 26px;
+      padding: 1.5px;
+      isolation: isolate;
+    }
+    .auth-card-frame::before {
+      content: "";
+      position: absolute;
+      inset: -40%;
+      z-index: -1;
+      background: conic-gradient(from 0deg, var(--primary), var(--primary-2), var(--success), var(--primary));
+      animation: spinGlow 8s linear infinite;
+      opacity: 0.55;
+    }
+    @keyframes spinGlow { to { transform: rotate(360deg); } }
 
     .auth-card {
       position: relative;
-      z-index: 10;
       background: var(--card-bg);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
+      backdrop-filter: blur(26px);
+      -webkit-backdrop-filter: blur(26px);
       border: 1px solid var(--card-border);
       border-radius: 24px;
-      padding: 44px 40px;
+      padding: 40px 36px;
       width: 100%;
-      max-width: 460px;
-      box-shadow: 
-        inset 0 1px 0 rgba(255, 255, 255, 0.15),
-        0 30px 60px -12px rgba(0, 0, 0, 0.7);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        0 30px 70px -16px rgba(0, 0, 0, 0.75);
       text-align: center;
-      animation: fadeInUp 0.5s ease-out;
+      animation: fadeInUp 0.55s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     @keyframes fadeInUp {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; transform: translateY(24px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
-    .auth-card.shake {
-      animation: shake 0.4s ease-in-out;
-    }
-
+    .auth-card.shake { animation: shake 0.42s ease-in-out; }
     @keyframes shake {
       0%, 100% { transform: translateX(0); }
-      20%, 60% { transform: translateX(-10px); }
-      40%, 80% { transform: translateX(10px); }
+      20%, 60% { transform: translateX(-9px); }
+      40%, 80% { transform: translateX(9px); }
     }
 
     .brand-icon-wrapper {
-      width: 72px;
-      height: 72px;
-      margin: 0 auto 20px auto;
-      background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+      width: 60px;
+      height: 60px;
+      margin: 0 auto 18px auto;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.25));
       border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 20px;
+      border-radius: 18px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 32px;
       box-shadow: 0 10px 25px -5px var(--primary-glow);
     }
 
-    .auth-card h1 {
-      font-size: 26px;
+    .auth-card .eyebrow {
+      display: inline-block;
+      font-size: 11px;
       font-weight: 700;
-      letter-spacing: -0.5px;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: var(--primary);
+      background: var(--primary-soft);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 4px 12px;
+      border-radius: 100px;
+      margin-bottom: 14px;
+    }
+
+    .auth-card h1 {
+      font-size: 25px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
       margin-bottom: 6px;
-      background: linear-gradient(to right, #ffffff, #94a3b8);
+      background: linear-gradient(to right, #ffffff, #9aa7c2);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
 
-    .auth-card p {
+    .auth-card > p.subtitle {
       color: var(--muted);
-      font-size: 14px;
-      margin-bottom: 32px;
-      line-height: 1.5;
+      font-size: 13.5px;
+      margin-bottom: 30px;
+      line-height: 1.55;
+      padding: 0 6px;
     }
 
-    .form-group {
-      margin-bottom: 22px;
-      text-align: left;
-    }
+    .form-group { margin-bottom: 22px; text-align: left; }
 
     .form-group label {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 700;
       color: var(--muted);
-      margin-bottom: 8px;
+      margin-bottom: 10px;
       text-transform: uppercase;
       letter-spacing: 0.8px;
     }
 
-    .input-wrapper {
-      position: relative;
-      display: flex;
-      align-items: center;
-    }
+    /* ---------- Segmentli (OTP tarzi) girisler ---------- */
+    .segmented-row { display: flex; align-items: center; gap: 8px; justify-content: center; }
 
-    .input-icon {
-      position: absolute;
-      left: 14px;
-      font-size: 16px;
-      color: var(--muted);
-      pointer-events: none;
-    }
-
-    .form-control {
-      width: 100%;
-      background: rgba(11, 15, 25, 0.7);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 14px 16px 14px 44px;
-      color: #fff;
-      font-size: 15px;
-      outline: none;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .form-control-mono {
+    .segmented-prefix {
       font-family: 'JetBrains Mono', monospace;
-      letter-spacing: 1.5px;
+      font-weight: 800;
+      font-size: 17px;
+      color: var(--muted);
+      padding: 0 2px;
+      user-select: none;
+      letter-spacing: 1px;
+    }
+
+    .segment-box {
+      width: 46px;
+      height: 54px;
+      text-align: center;
+      background: rgba(6, 9, 18, 0.75);
+      border: 1.5px solid var(--card-border);
+      border-radius: 12px;
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 21px;
       font-weight: 700;
-      text-transform: uppercase;
+      outline: none;
+      transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+      caret-color: var(--primary);
     }
 
-    .form-control:focus {
+    .segment-box:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 4px var(--primary-glow);
-      background: rgba(11, 15, 25, 0.9);
+      box-shadow: 0 0 0 4px var(--primary-glow), inset 0 0 0 1px var(--primary);
+      background: rgba(6, 9, 18, 0.95);
+      transform: translateY(-1px);
     }
 
-    .toggle-password {
-      position: absolute;
-      right: 14px;
+    .segment-box.filled {
+      animation: popIn 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+      border-color: rgba(59, 130, 246, 0.55);
+    }
+
+    @keyframes popIn {
+      0% { transform: scale(0.85); }
+      60% { transform: scale(1.06); }
+      100% { transform: scale(1); }
+    }
+
+    @media (max-width: 400px) {
+      .segment-box { width: 38px; height: 48px; font-size: 18px; }
+    }
+
+    .segment-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
       background: none;
       border: none;
       color: var(--muted);
       cursor: pointer;
-      font-size: 16px;
-      padding: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 8px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      transition: color 0.15s;
     }
-
-    .toggle-password:hover { color: #fff; }
+    .segment-toggle:hover { color: #fff; }
 
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 10px;
-      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      background: linear-gradient(135deg, var(--primary), var(--primary-2));
       color: #fff;
       border: none;
-      border-radius: 12px;
-      padding: 14px 24px;
-      font-size: 16px;
-      font-weight: 600;
+      border-radius: 13px;
+      padding: 15px 24px;
+      font-size: 15.5px;
+      font-weight: 700;
       cursor: pointer;
       transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 8px 20px -4px var(--primary-glow);
+      box-shadow: 0 10px 24px -6px var(--primary-glow);
       text-decoration: none;
+      position: relative;
+      overflow: hidden;
     }
 
-    .btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 12px 25px -4px var(--primary-glow);
+    /* Hover'da soldan saga gecen ince bir "isik" seridi - buton uzerine
+       gelindiginde canli/premium hissi veren, GPU-dostu (transform) bir
+       mikro-etkilesim. */
+    .btn::after {
+      content: "";
+      position: absolute;
+      top: 0; left: -60%;
+      width: 40%; height: 100%;
+      background: linear-gradient(120deg, transparent, rgba(255,255,255,0.35), transparent);
+      transform: skewX(-20deg);
+      transition: left 0.6s ease;
     }
+    .btn:hover::after { left: 130%; }
 
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 14px 28px -6px var(--primary-glow); }
     .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
     .btn-secondary {
       background: rgba(255, 255, 255, 0.06);
@@ -238,20 +326,28 @@
       border: 1px solid var(--card-border);
       box-shadow: none;
     }
+    .btn-secondary::after { display: none; }
     .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); box-shadow: none; }
 
-    .error-alert {
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
+    .status-alert {
       padding: 12px 16px;
       border-radius: 10px;
       font-size: 13px;
-      margin-bottom: 22px;
+      margin-bottom: 20px;
       display: none;
       text-align: left;
       align-items: center;
       gap: 10px;
+      line-height: 1.4;
+    }
+    .status-alert.error { background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
+    .status-alert.warn { background: var(--warning-soft); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--warning-text); }
+    .status-alert.locked { background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5; }
+
+    .lockout-timer {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 800;
+      color: #fff;
     }
 
     .trust-badges {
@@ -259,20 +355,16 @@
       align-items: center;
       justify-content: center;
       gap: 14px;
-      margin-top: 30px;
-      padding-top: 24px;
+      margin-top: 28px;
+      padding-top: 22px;
       border-top: 1px solid rgba(255, 255, 255, 0.08);
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11.5px;
+      flex-wrap: wrap;
     }
+    .trust-badge-item { display: flex; align-items: center; gap: 5px; }
 
-    .trust-badge-item {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    /* Dashboard Header */
+    /* ---------- Dashboard (canli gorunum) - mevcut islevsellik korunuyor ---------- */
     header {
       background: var(--card-bg);
       backdrop-filter: blur(16px);
@@ -304,7 +396,6 @@
     .live-dot { width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: pulse 1.5s infinite; }
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
 
-    /* Nav Tabs */
     .tabs-bar {
       display: flex;
       gap: 12px;
@@ -328,7 +419,6 @@
     .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
     .tab-btn.active { color: #fff; background: var(--primary-soft); border: 1px solid rgba(59, 130, 246, 0.3); }
 
-    /* Summary Stats */
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -347,7 +437,6 @@
     .stat-val { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
     .stat-lbl { color: var(--muted); font-size: 13px; }
 
-    /* Courses & Cards */
     .course-title { font-size: 20px; font-weight: 700; margin: 32px 0 16px 0; display: flex; align-items: center; justify-content: space-between; }
 
     .card-grid {
@@ -374,7 +463,6 @@
     .exam-status.ok { color: var(--success); }
     .exam-status.warn { color: var(--warning); }
 
-    /* Detailed Missing List on Card */
     .missing-details {
       margin-top: 14px;
       border-top: 1px solid var(--card-border);
@@ -393,27 +481,10 @@
       justify-content: space-between;
     }
 
-    .missing-table-card {
-      width: 100%;
-      margin-top: 10px;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
+    .missing-table-card { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 13px; }
+    .missing-table-card th { text-align: left; color: var(--muted); padding: 6px 4px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .missing-table-card td { padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); }
 
-    .missing-table-card th {
-      text-align: left;
-      color: var(--muted);
-      padding: 6px 4px;
-      font-weight: 600;
-      border-bottom: 1px solid rgba(255,255,255,0.08);
-    }
-
-    .missing-table-card td {
-      padding: 8px 4px;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-
-    /* Master Missing Roster View */
     .table-container {
       background: var(--card-bg);
       backdrop-filter: blur(12px);
@@ -422,19 +493,22 @@
       padding: 24px;
     }
 
-    .search-bar-row {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 20px;
-    }
+    .search-bar-row { display: flex; gap: 12px; margin-bottom: 20px; }
 
-    .master-table {
+    .form-control {
       width: 100%;
-      border-collapse: collapse;
-      text-align: left;
-      font-size: 14px;
+      background: rgba(11, 15, 25, 0.7);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      color: #fff;
+      font-size: 15px;
+      outline: none;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     }
+    .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-glow); background: rgba(11, 15, 25, 0.9); }
 
+    .master-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
     .master-table th {
       background: rgba(15, 23, 42, 0.6);
       color: var(--muted);
@@ -445,15 +519,8 @@
       letter-spacing: 0.5px;
       border-bottom: 1px solid var(--card-border);
     }
-
-    .master-table td {
-      padding: 14px 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-
-    .master-table tr:hover td {
-      background: rgba(255, 255, 255, 0.02);
-    }
+    .master-table td { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .master-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
 
     .badge-warn {
       background: var(--warning-soft);
@@ -466,7 +533,6 @@
       display: inline-block;
     }
 
-    /* Loading Spinner */
     .spinner {
       width: 18px;
       height: 18px;
@@ -475,10 +541,7 @@
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -487,70 +550,66 @@
   <div id="auth-screen" class="auth-wrapper">
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
 
-    <div class="auth-card" id="auth-card-box">
-      <div class="brand-icon-wrapper">🌐</div>
-      <h1>BB Bulut Görünüm</h1>
-      <p>Blackboard Sınav Yakalayıcı masaüstü uygulamasında oluşturulan kodlarla canlı oturuma katılın.</p>
-      
-      <div id="auth-error" class="error-alert">
-        <span>⚠️</span>
-        <span id="auth-error-text"></span>
-      </div>
-
-      <div class="form-group">
-        <label>
-          <span>Referans Kodu</span>
-          <span style="color: var(--primary); font-size: 11px;">Masaüstü GUI'den Alın</span>
-        </label>
-        <div class="input-wrapper">
-          <span class="input-icon">🏷️</span>
-          <input 
-            id="inp-ref" 
-            type="text" 
-            class="form-control form-control-mono" 
-            placeholder="REF-8492" 
-            autocomplete="off"
-            oninput="this.value = this.value.toUpperCase()"
-          />
+    <div class="auth-card-frame">
+      <div class="auth-card" id="auth-card-box">
+        <div class="brand-icon-wrapper">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2 4 5.5V11c0 5.05 3.4 9.77 8 11 4.6-1.23 8-5.95 8-11V5.5L12 2Z" stroke="#93c5fd" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="m9 12 2 2 4-4.5" stroke="#93c5fd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </div>
-      </div>
+        <span class="eyebrow">Güvenli Bulut Erişimi</span>
+        <h1>BB Bulut Görünüm</h1>
+        <p class="subtitle">Masaüstü uygulamasında oluşturulan Referans Kodu ve PIN ile canlı oturuma katıl.</p>
 
-      <div class="form-group">
-        <label>
-          <span>PIN Kodu</span>
-          <span style="color: var(--muted); font-size: 11px;">4 Haneli Güvenlik PIN'i</span>
-        </label>
-        <div class="input-wrapper">
-          <span class="input-icon">🔑</span>
-          <input 
-            id="inp-pin" 
-            type="password" 
-            maxlength="6" 
-            class="form-control form-control-mono" 
-            placeholder="••••" 
-          />
-          <button type="button" class="toggle-password" onclick="togglePinVisibility()">👁️</button>
+        <div id="auth-status" class="status-alert error">
+          <span id="auth-status-icon">⚠️</span>
+          <span id="auth-status-text"></span>
         </div>
-      </div>
 
-      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
-        <button id="btn-login" class="btn" style="width: 100%;" onclick="doLogin()">
-          <span id="btn-text">🚀 Verileri Canlı Göster</span>
-          <span id="btn-spinner" class="spinner" style="display: none;"></span>
-        </button>
+        <div class="form-group">
+          <label>
+            <span>Referans Kodu</span>
+            <span style="color: var(--primary); font-size: 11px;">Masaüstü GUI'den Alın</span>
+          </label>
+          <div class="segmented-row" id="ref-box-row">
+            <span class="segmented-prefix">REF</span>
+            <span class="segmented-prefix" style="color: var(--card-border);">–</span>
+            <!-- 4 tek karakterlik kutu JS ile buraya ekleniyor -->
+          </div>
+        </div>
 
-        <button type="button" class="btn btn-secondary" style="width: 100%; font-size: 13px;" onclick="loadDemoMode()">
-          ✨ Demo Verileri İle Önizle (Canlı Test)
-        </button>
-      </div>
+        <div class="form-group">
+          <label>
+            <span>PIN Kodu</span>
+            <span style="color: var(--muted); font-size: 11px;">4 Haneli Güvenlik PIN'i</span>
+          </label>
+          <div class="segmented-row" id="pin-box-row">
+            <!-- 4 tek haneli kutu JS ile buraya ekleniyor -->
+            <button type="button" class="segment-toggle" onclick="togglePinVisibility()">👁️ <span id="pin-toggle-label">Göster</span></button>
+          </div>
+        </div>
 
-      <div class="trust-badges">
-        <div class="trust-badge-item">🔒 256-Bit Şifreli</div>
-        <div>•</div>
-        <div class="trust-badge-item">⚡ Anlık Canlı Senkron</div>
-        <div>•</div>
-        <div class="trust-badge-item">🛡️ Salt-Okunur</div>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 6px;">
+          <button id="btn-login" class="btn" style="width: 100%;" onclick="doLogin()">
+            <span id="btn-text">🚀 Verileri Canlı Göster</span>
+            <span id="btn-spinner" class="spinner" style="display: none;"></span>
+          </button>
+
+          <button type="button" class="btn btn-secondary" style="width: 100%; font-size: 13px;" onclick="loadDemoMode()">
+            ✨ Demo Verileri İle Önizle (Canlı Test)
+          </button>
+        </div>
+
+        <div class="trust-badges">
+          <div class="trust-badge-item">🔒 Uçtan Uca Kod Korumalı</div>
+          <div>•</div>
+          <div class="trust-badge-item">⚡ Anlık Canlı Senkron</div>
+          <div>•</div>
+          <div class="trust-badge-item">🛡️ Salt-Okunur</div>
+        </div>
       </div>
     </div>
   </div>
@@ -569,7 +628,6 @@
     </header>
 
     <div class="container">
-      <!-- Tabs -->
       <div class="tabs-bar">
         <button id="tab-cards-btn" class="tab-btn active" onclick="switchTab('cards')">📊 Sınav Kartları Görünümü</button>
         <button id="tab-list-btn" class="tab-btn" onclick="switchTab('list')">🚨 Detaylı Eksik Öğrenciler Listesi (<span id="total-missing-badge">0</span>)</button>
@@ -577,16 +635,14 @@
 
       <div id="summary-area" class="summary-grid"></div>
 
-      <!-- Tab 1: Cards View -->
       <div id="tab-cards-view">
         <div id="courses-area"></div>
       </div>
 
-      <!-- Tab 2: Master Missing Roster View -->
       <div id="tab-list-view" style="display: none;">
         <div class="table-container">
           <div class="search-bar-row">
-            <input id="inp-master-search" type="text" class="form-control" style="padding-left: 16px;" placeholder="🔍 Öğrenci adı, numarası veya sınav adı ile canlı ara..." oninput="renderMasterTable()" />
+            <input id="inp-master-search" type="text" class="form-control" placeholder="🔍 Öğrenci adı, numarası veya sınav adı ile canlı ara..." oninput="renderMasterTable()" />
             <button class="btn btn-secondary" onclick="copyMasterMissingList()">📋 Listeyi Kopyala</button>
             <button class="btn btn-secondary" onclick="downloadMasterCSV()">📥 CSV İndir</button>
           </div>
@@ -612,31 +668,121 @@
     let activeRef = localStorage.getItem('bb_ref') || '';
     let activePin = localStorage.getItem('bb_pin') || '';
     let refreshTimer = null;
+    let lockoutTimer = null;
     let currentData = null;
     let allMissingStudentsMaster = [];
+    let pinVisible = false;
+
+    // ---------- Segmentli (OTP tarzi) giris kutulari ----------
+    // Ref kod ve PIN icin, her biri TEK karakter alan kucuk input kutulari
+    // olusturur; yazildikca otomatik bir sonraki kutuya gecer, Backspace
+    // ile bosken bir onceki kutuya doner, yapistirmada (paste) tum degeri
+    // kutulara dagitir. Boylece tek bir metin kutusu yerine 2FA/OTP
+    // ekranlarindaki gibi "segmentli" bir giris deneyimi olusur.
+    function buildSegmentBoxes(containerEl, count, opts) {
+      opts = opts || {};
+      const boxes = [];
+      for (let i = 0; i < count; i++) {
+        const box = document.createElement('input');
+        box.type = opts.password ? 'password' : 'text';
+        box.className = 'segment-box';
+        box.maxLength = 1;
+        box.autocomplete = 'off';
+        box.inputMode = opts.numeric ? 'numeric' : 'text';
+        box.dataset.index = String(i);
+        box.addEventListener('input', () => {
+          let v = box.value;
+          if (opts.numeric) v = v.replace(/[^0-9]/g, '');
+          else v = v.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+          box.value = v.slice(-1);
+          if (box.value) {
+            box.classList.add('filled');
+            const next = boxes[i + 1];
+            if (next) next.focus();
+          } else {
+            box.classList.remove('filled');
+          }
+          if (opts.onChange) opts.onChange();
+        });
+        box.addEventListener('keydown', (e) => {
+          if (e.key === 'Backspace' && !box.value && i > 0) {
+            boxes[i - 1].focus();
+          } else if (e.key === 'ArrowLeft' && i > 0) {
+            boxes[i - 1].focus();
+          } else if (e.key === 'ArrowRight' && i < count - 1) {
+            boxes[i + 1].focus();
+          }
+        });
+        box.addEventListener('paste', (e) => {
+          e.preventDefault();
+          let text = (e.clipboardData || window.clipboardData).getData('text') || '';
+          text = opts.numeric ? text.replace(/[^0-9]/g, '') : text.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+          for (let j = 0; j < text.length && i + j < count; j++) {
+            boxes[i + j].value = text[j];
+            boxes[i + j].classList.add('filled');
+          }
+          const lastIdx = Math.min(i + text.length, count - 1);
+          boxes[lastIdx].focus();
+          if (opts.onChange) opts.onChange();
+        });
+        containerEl.appendChild(box);
+        boxes.push(box);
+      }
+      return boxes;
+    }
+
+    function getBoxesValue(boxes) {
+      return boxes.map((b) => b.value || '').join('');
+    }
+
+    function setBoxesValue(boxes, value) {
+      const chars = (value || '').split('');
+      boxes.forEach((b, i) => {
+        b.value = chars[i] || '';
+        b.classList.toggle('filled', Boolean(b.value));
+      });
+    }
+
+    const refBoxes = buildSegmentBoxes(document.getElementById('ref-box-row'), 4, { numeric: false });
+    const pinBoxes = buildSegmentBoxes(document.getElementById('pin-box-row'), 4, { numeric: true, password: true });
+    // PIN kutu grubu, "Göster/Gizle" dugmesinden SONRA DOM'a eklenmis
+    // olmali - kutular container'a appendChild ile eklendigi icin dugme
+    // (zaten HTML'de var olan) otomatik olarak EN SONA degil, kutulardan
+    // SONRA kalir; gorsel sira duzeltmesi asagida yapiliyor.
+    document.getElementById('pin-box-row').appendChild(
+      document.querySelector('.segment-toggle')
+    );
+
+    function togglePinVisibility() {
+      pinVisible = !pinVisible;
+      pinBoxes.forEach((b) => { b.type = pinVisible ? 'text' : 'password'; });
+      document.getElementById('pin-toggle-label').innerText = pinVisible ? 'Gizle' : 'Göster';
+    }
 
     if (activeRef && activePin) {
-      document.getElementById('inp-ref').value = activeRef;
-      document.getElementById('inp-pin').value = activePin;
+      setBoxesValue(refBoxes, activeRef.replace(/^REF-/, ''));
+      setBoxesValue(pinBoxes, activePin);
       doLogin();
     }
 
-    function togglePinVisibility() {
-      const pinInp = document.getElementById('inp-pin');
-      pinInp.type = pinInp.type === 'password' ? 'text' : 'password';
-    }
-
-    function showError(msg) {
-      const errEl = document.getElementById('auth-error');
-      const errTxt = document.getElementById('auth-error-text');
+    function showStatus(msg, kind) {
+      const el = document.getElementById('auth-status');
+      const icon = document.getElementById('auth-status-icon');
+      const txt = document.getElementById('auth-status-text');
       const cardBox = document.getElementById('auth-card-box');
 
-      errTxt.innerText = msg;
-      errEl.style.display = 'flex';
-      
+      el.className = 'status-alert ' + (kind || 'error');
+      icon.innerText = kind === 'locked' ? '⏳' : kind === 'warn' ? '⚠️' : '⚠️';
+      txt.innerHTML = msg;
+      el.style.display = 'flex';
+
       cardBox.classList.remove('shake');
-      void cardBox.offsetWidth; // trigger reflow
+      void cardBox.offsetWidth;
       cardBox.classList.add('shake');
+    }
+
+    function hideStatus() {
+      document.getElementById('auth-status').style.display = 'none';
     }
 
     function setLoginLoading(loading) {
@@ -645,14 +791,33 @@
       document.getElementById('btn-login').disabled = loading;
     }
 
-    async function doLogin() {
-      const ref = document.getElementById('inp-ref').value.trim().toUpperCase();
-      const pin = document.getElementById('inp-pin').value.trim();
-      const errEl = document.getElementById('auth-error');
-      errEl.style.display = 'none';
+    function startLockoutCountdown(seconds) {
+      clearInterval(lockoutTimer);
+      let remaining = seconds;
+      const btn = document.getElementById('btn-login');
+      btn.disabled = true;
+      const tick = () => {
+        const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+        const ss = String(remaining % 60).padStart(2, '0');
+        showStatus(`Çok fazla hatalı deneme. Tekrar deneyebilmen için <span class="lockout-timer">${mm}:${ss}</span> kaldı.`, 'locked');
+        remaining -= 1;
+        if (remaining < 0) {
+          clearInterval(lockoutTimer);
+          btn.disabled = false;
+          hideStatus();
+        }
+      };
+      tick();
+      lockoutTimer = setInterval(tick, 1000);
+    }
 
-      if (!ref || !pin) {
-        showError('Lütfen Referans Kodu ve PIN girin.');
+    async function doLogin() {
+      const ref = 'REF-' + getBoxesValue(refBoxes).toUpperCase();
+      const pin = getBoxesValue(pinBoxes);
+      hideStatus();
+
+      if (getBoxesValue(refBoxes).length < 4 || pin.length < 4) {
+        showStatus('Lütfen 4 haneli Referans Kodu ve 4 haneli PIN kodunun tamamını gir.', 'warn');
         return;
       }
 
@@ -663,8 +828,18 @@
         const json = await resp.json();
         setLoginLoading(false);
 
+        if (resp.status === 429 || json.locked) {
+          startLockoutCountdown(json.retry_after_seconds || 60);
+          return;
+        }
+
         if (!resp.ok || !json.success) {
-          throw new Error(json.error || 'Giriş başarısız.');
+          let msg = json.error || 'Giriş başarısız.';
+          if (typeof json.attempts_remaining === 'number') {
+            msg += ` (${json.attempts_remaining} deneme hakkın kaldı)`;
+          }
+          showStatus(msg, 'error');
+          return;
         }
 
         activeRef = ref;
@@ -680,7 +855,7 @@
         startAutoRefresh();
       } catch (err) {
         setLoginLoading(false);
-        showError(err.message);
+        showStatus(err.message, 'error');
       }
     }
 
@@ -747,6 +922,7 @@
       localStorage.removeItem('bb_ref');
       localStorage.removeItem('bb_pin');
       clearInterval(refreshTimer);
+      clearInterval(lockoutTimer);
       document.getElementById('dash-screen').style.display = 'none';
       document.getElementById('auth-screen').style.display = 'flex';
     }
@@ -824,14 +1000,14 @@
       (data.courses || []).forEach(course => {
         const cDiv = document.createElement('div');
         cDiv.innerHTML = `<h2 class="course-title"><span>📁 ${course.name}</span></h2>`;
-        
+
         const grid = document.createElement('div');
         grid.className = 'card-grid';
 
         course.exams.forEach(exam => {
           const card = document.createElement('div');
           card.className = 'exam-card';
-          
+
           let statusText = `${exam.item_count} öğe`;
           let statusClass = '';
           let missingHtml = '';
@@ -961,7 +1137,7 @@
         alert('İndirilecek eksik öğrenci bulunmuyor.');
         return;
       }
-      let csv = "\uFEFFDers;Sınav;Ad Soyad;Öğrenci Numarası\n";
+      let csv = "﻿Ders;Sınav;Ad Soyad;Öğrenci Numarası\n";
       allMissingStudentsMaster.forEach(s => {
         csv += `"${s.course}";"${s.exam}";"${s.name}";"${s.no}"\n`;
       });
