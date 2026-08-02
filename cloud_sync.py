@@ -14,6 +14,7 @@ Kullanım:
 import json
 import random
 import secrets
+import ssl
 import string
 import threading
 import time
@@ -21,6 +22,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+try:
+    import certifi
+    _SSL_CONTEXT: ssl.SSLContext | None = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CONTEXT = None
 
 from common import collect_download_overview, summarize_download_overview
 
@@ -174,7 +181,7 @@ class CloudSyncManager:
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=8, context=_SSL_CONTEXT) as resp:
                 resp_text = resp.read().decode("utf-8", errors="replace")
                 with self._lock:
                     self.last_sync_time = time.time()

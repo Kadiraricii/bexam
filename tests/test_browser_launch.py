@@ -16,9 +16,11 @@ from playwright.sync_api import sync_playwright
 
 import common
 from capture import (
+    FINAL_CLEANUP_JS,
     FORCE_VISIBLE_CSS,
     HIDE_NAVIGATION_CHROME_CSS,
     RESET_SCROLL_AFTER_CAPTURE_JS,
+    RESTORE_OFFCANVAS_SIBLINGS_JS,
     add_style_all_frames,
 )
 from scan_course import _find_row_by_exact_name, find_exam_row_names
@@ -778,6 +780,165 @@ def test_find_row_by_exact_name_resets_to_top_before_scanning_when_scroll_alread
             browser.close()
 
     assert found_id == "target-row"
+
+
+@requires_chrome
+def test_final_cleanup_js_isolates_offcanvas_panel_from_background_page():
+    # CANLI DOGRULANAN HATA (kullanicinin paylastigi PDF): ogrenci
+    # degerlendirme paneli, Not Defteri sayfasinin USTUNE acilan bir
+    # off-canvas panel (`[bb-offcanvas-pausal-scope]`, ui-view="course-
+    # grades-peek-gradebook-item-assessment-panel@"). FORCE_VISIBLE_CSS
+    # `* { position: static !important }` uyguladigi icin bu panelin
+    # arka plani gizleme/ustte yuzme mekanizmasi bozuluyor - arka plan
+    # sayfasi (kurs basligi, Not Defteri tablosu) asil icerikten ONCE
+    # basiliyordu.
+    #
+    # IKINCI CANLI DOGRULANAN HATA (ilk duzeltmenin KENDI icinde):
+    # `[bb-offcanvas-pausal-scope]` ozniteligi SADECE degerlendirme
+    # panelinde DEGIL, "Öğrenci Gönderimleri" LISTE panelinde de
+    # (ui-view="course-grades-panel@") bulunuyor - ilk duzeltme TUM
+    # boyle panelleri "korunacak" sayiyordu, bu da liste panelinin KENDI
+    # icerigini (tum ogrenci/not tablosu) da PDF'e sizdiriyordu. Artik
+    # SADECE ui-view'i "gradebook-item-assessment-panel" iceren (ya da
+    # <bb-flexible-attempt-grading-ui> etiketi olan) SPESIFIK panel
+    # korunuyor - DIGER off-canvas panelleri (liste paneli dahil) ARTIK
+    # normal arka plan sayilip gizleniyor.
+    html = """
+    <html><body>
+      <header id="course-header">KURS BASLIGI - GIZLENMELI</header>
+      <nav id="course-tabs">Ders İçeriği Takvim Duyurular - GIZLENMELI</nav>
+      <div id="gradebook-table">Not Defteri tablosu - GIZLENMELI</div>
+      <div bb-offcanvas-pausal-scope="" ui-view="course-grades-panel@" id="submissions-panel">
+        <div id="submissions-list">Öğrenci Gönderimleri listesi - GIZLENMELI</div>
+        <div bb-offcanvas-pausal-scope="" ui-view="course-grades-peek-gradebook-item-assessment-panel@" id="grading-panel">
+          <div id="exam-content">Asıl sınav içeriği - KALMALI</div>
+        </div>
+      </div>
+    </body></html>
+    """
+    kwargs = common.browser_launch_kwargs()
+    kwargs["headless"] = True
+    kwargs.pop("viewport", None)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(**kwargs)
+        try:
+            page = browser.new_page()
+            page.set_content(html)
+            page.evaluate(FINAL_CLEANUP_JS)
+            visibility = {
+                "course-header": page.locator("#course-header").is_visible(),
+                "course-tabs": page.locator("#course-tabs").is_visible(),
+                "gradebook-table": page.locator("#gradebook-table").is_visible(),
+                "submissions-list": page.locator("#submissions-list").is_visible(),
+                "exam-content": page.locator("#exam-content").is_visible(),
+            }
+        finally:
+            browser.close()
+
+    assert visibility["course-header"] is False
+    assert visibility["course-tabs"] is False
+    assert visibility["gradebook-table"] is False
+    assert visibility["submissions-list"] is False
+    assert visibility["exam-content"] is True
+
+
+@requires_chrome
+def test_restore_offcanvas_siblings_js_undoes_final_cleanup_hiding():
+    # CANLI DOGRULANAN HATA (kullanicinin bildirdigi: bombos sayfa sayisi
+    # OGRENCIDEN OGRENCIYE DEGISIYORDU - 3, 5, 8): FINAL_CLEANUP_JS'in
+    # off-canvas kardes-gizleme adimi eskiden HICBIR YERDE geri
+    # alinmiyordu - capture_student AYNI sayfada ART ARDA birden fazla
+    # ogrenci yakaladigi icin bu, HER capture'da BIRIKEN kalici bir yan
+    # etkiye yol aciyordu. Bu test, RESTORE_OFFCANVAS_SIBLINGS_JS'in bu
+    # gizlemeyi TAM OLARAK geri aldigini (element ONCEKI gorunur haline
+    # DONUYOR) GERCEK Chrome'da dogruluyor - iki ardisik capture'i
+    # simule eder.
+    html = """
+    <html><body>
+      <div id="course-header">KURS BASLIGI</div>
+      <div bb-offcanvas-pausal-scope="" ui-view="course-grades-peek-gradebook-item-assessment-panel@" id="grading-panel">
+        <div id="exam-content">Asıl sınav içeriği</div>
+      </div>
+    </body></html>
+    """
+    kwargs = common.browser_launch_kwargs()
+    kwargs["headless"] = True
+    kwargs.pop("viewport", None)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(**kwargs)
+        try:
+            page = browser.new_page()
+            page.set_content(html)
+            # 1. "capture": gizler.
+            page.evaluate(FINAL_CLEANUP_JS)
+            hidden_after_first_capture = page.locator("#course-header").is_visible()
+            # capture_current_page'in finally blogundaki AYNI adim: geri alir.
+            page.evaluate(RESTORE_OFFCANVAS_SIBLINGS_JS)
+            visible_after_restore = page.locator("#course-header").is_visible()
+            # 2. "capture" (ör. bir sonraki ogrenci): eleman hala normal
+            # sekilde tekrar gizlenebiliyor mu (kalici bir 'artik hic
+            # dokunulamaz' durumuna dusmedi mi) diye dogrula.
+            page.evaluate(FINAL_CLEANUP_JS)
+            hidden_after_second_capture = page.locator("#course-header").is_visible()
+        finally:
+            browser.close()
+
+    assert hidden_after_first_capture is False
+    assert visible_after_restore is True
+    assert hidden_after_second_capture is False
+
+
+@requires_chrome
+def test_final_cleanup_js_resets_main_content_virtualization_height():
+    # CANLI DOGRULANAN (kullanicinin paylastigi gercek DOM): sinav
+    # sorularini SARAN asil icerik konteyneri, "Ana gönderim içeriği"
+    # (hideOffScreen) etiketinden HEMEN SONRA gelen ve `style="transform:
+    # translateY(...)"` tasiyan bir SANAL LISTE (virtualization) deseni
+    # kullaniyor. Boyle bir konteynerin ACIKCA belirlenmis, GERCEK
+    # icerikten BUYUK bir `height`i varsa (ör. tahmini toplam yukseklik
+    # gercek render edilenden fazla kalirsa), PDF'in sonunda bombos
+    # sayfalara yol aciyordu. Bu test, FINAL_CLEANUP_JS'in bu sarmalayiciyi
+    # (SADECE onu - class adina degil "Ana gönderim içeriği" METNINE gore
+    # bulunuyor) height:auto'ya sifirladigini VE RESTORE_OFFCANVAS_
+    # SIBLINGS_JS'in bunu GERI ALDIGINI GERCEK Chrome'da dogruluyor.
+    html = """
+    <html><body>
+      <div class="content-body">
+        <h2 class="hideOffScreen">Ana gönderim içeriği</h2>
+        <div id="virtualized-wrapper" style="height: 5000px; transform: translateY(0px);">
+          <div>Soru 1</div>
+        </div>
+      </div>
+    </body></html>
+    """
+    kwargs = common.browser_launch_kwargs()
+    kwargs["headless"] = True
+    kwargs.pop("viewport", None)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(**kwargs)
+        try:
+            page = browser.new_page()
+            page.set_content(html)
+            height_before = page.evaluate(
+                "document.getElementById('virtualized-wrapper').style.height"
+            )
+            page.evaluate(FINAL_CLEANUP_JS)
+            height_after_cleanup = page.evaluate(
+                "document.getElementById('virtualized-wrapper').style.height"
+            )
+            page.evaluate(RESTORE_OFFCANVAS_SIBLINGS_JS)
+            height_after_restore = page.evaluate(
+                "document.getElementById('virtualized-wrapper').style.height"
+            )
+        finally:
+            browser.close()
+
+    assert height_before == "5000px"
+    assert height_after_cleanup == "auto"
+    assert height_after_restore == "5000px"
 
 
 def test_is_chrome_missing_error_recognizes_real_playwright_message_format():

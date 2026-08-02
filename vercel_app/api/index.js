@@ -1,43 +1,23 @@
 // Vercel Serverless Function: Tekil API Router (/api/sync & /api/view)
-const fs = require('fs');
-const path = require('path');
+// Upstash Redis ile kalıcı depolama — tüm instance'lar aynı veriye erişir
+const { Redis } = require('@upstash/redis');
 
-const TMP_FILE = path.join('/tmp', 'bb_cloud_store.json');
-const store = global._bb_cloud_store || (global._bb_cloud_store = new Map());
-const attempts = global._bb_login_attempts || (global._bb_login_attempts = new Map());
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 5 * 60 * 1000; // 5 dakika
+const TTL_SECONDS = 24 * 60 * 60;  // 24 saat TTL
 
-function loadPersistedStore() {
-  if (fs.existsSync(TMP_FILE)) {
-    try {
-      const raw = fs.readFileSync(TMP_FILE, 'utf8');
-      const obj = JSON.parse(raw);
-      Object.keys(obj).forEach(k => {
-        store.set(k, obj[k]);
-      });
-    } catch (e) {}
-  }
+async function getAttemptState(refCode) {
+  const val = await redis.get(`attempts:${refCode}`);
+  return val || { count: 0, lockedUntil: 0 };
 }
 
-function savePersistedStore() {
-  try {
-    const obj = {};
-    store.forEach((val, key) => {
-      obj[key] = val;
-    });
-    fs.writeFileSync(TMP_FILE, JSON.stringify(obj), 'utf8');
-  } catch (e) {}
-}
-
-// Cold-start aninda diskten hafizaya yukle
-if (store.size === 0) {
-  loadPersistedStore();
-}
-
-function getAttemptState(key) {
-  return attempts.get(key) || { count: 0, lockedUntil: 0 };
+async function setAttemptState(refCode, state) {
+  await redis.set(`attempts:${refCode}`, state, { ex: TTL_SECONDS });
 }
 
 module.exports = async (req, res) => {
@@ -49,10 +29,12 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  // URL yolunu tespit et (ör: /api/sync vs /api/view)
   const urlPath = (req.url || "").split("?")[0].toLowerCase();
   const isSync = urlPath.endsWith("/sync") || req.query.action === "sync";
 
+  // ============================
+  // POST /api/sync — veri yükle
+  // ============================
   if (isSync) {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed for /api/sync" });
@@ -71,8 +53,7 @@ module.exports = async (req, res) => {
       const key = String(body.ref_code).trim().toUpperCase();
 
       if (body.action === "delete") {
-        store.delete(key);
-        savePersistedStore();
+        await redis.del(`session:${key}`);
         return res.status(200).json({ success: true, deleted: true, ref_code: key });
       }
 
@@ -80,12 +61,11 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: "Eksik parametreler (pin, data)" });
       }
 
-      store.set(key, {
+      await redis.set(`session:${key}`, {
         pin: String(body.pin).trim(),
         timestamp: body.timestamp || Date.now() / 1000,
-        data: body.data
-      });
-      savePersistedStore();
+        data: body.data,
+      }, { ex: TTL_SECONDS });
 
       return res.status(200).json({ success: true, ref_code: key, updated_at: Date.now() });
     } catch (err) {
@@ -93,7 +73,9 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---------- /api/view ----------
+  // ============================
+  // GET/POST /api/view — veri oku
+  // ============================
   let ref_code = "";
   let pin = "";
 
@@ -113,7 +95,7 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: "Referans Kodu ve PIN Kodu gereklidir." });
   }
 
-  const state = getAttemptState(ref_code);
+  const state = await getAttemptState(ref_code);
   const now = Date.now();
 
   if (state.lockedUntil > now) {
@@ -125,12 +107,8 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Eger hafiza bos kalmissa tekrar diskten kontrol et
-  if (!store.has(ref_code)) {
-    loadPersistedStore();
-  }
+  const record = await redis.get(`session:${ref_code}`);
 
-  const record = store.get(ref_code);
   if (!record) {
     return res.status(404).json({
       error: `Bu Referans Kodu (${ref_code}) ile henüz canlı yayın başlatılmamış. Masaüstü uygulamasındaki Ayarlar menüsünden "Bulut Yayını Başlat" butonuna tıkladığından emin ol.`
@@ -141,22 +119,22 @@ module.exports = async (req, res) => {
     const nextCount = state.count + 1;
     const remaining = Math.max(MAX_ATTEMPTS - nextCount, 0);
     if (nextCount >= MAX_ATTEMPTS) {
-      attempts.set(ref_code, { count: nextCount, lockedUntil: now + LOCKOUT_MS });
+      await setAttemptState(ref_code, { count: nextCount, lockedUntil: now + LOCKOUT_MS });
       return res.status(429).json({
         error: `Çok fazla hatalı deneme. ${Math.ceil(LOCKOUT_MS / 60000)} dakika boyunca bu kod için giriş kilitlendi.`,
         locked: true,
         retry_after_seconds: Math.ceil(LOCKOUT_MS / 1000),
       });
     }
-    attempts.set(ref_code, { count: nextCount, lockedUntil: 0 });
+    await setAttemptState(ref_code, { count: nextCount, lockedUntil: 0 });
     return res.status(401).json({
       error: `Hatalı PIN Kodu! Lütfen masaüstü uygulamasındaki 4 haneli PIN kodunu kontrol edin.`,
       attempts_remaining: remaining,
     });
   }
 
-  // Basarili giris
-  attempts.delete(ref_code);
+  // Başarılı giriş - deneme sayacını sıfırla
+  await redis.del(`attempts:${ref_code}`);
 
   return res.status(200).json({
     success: true,

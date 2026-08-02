@@ -297,6 +297,34 @@ Bu yüzden tarayıcı otomasyonu (Playwright) ile devam ediyoruz.
 | `.state/profile` | Chrome'un otomasyon için ayrı profil klasörü (Gizli Sekme'de oturum/cookie kalıcı DEĞİL, kalıcı olan sadece klasörün kendisi) |
 | `.state/captures.json` | Yakalanan her sayfanın metadata kaydı |
 
+### Hangi script'i ne zaman kullanmalıyım?
+
+- **Tek bir öğrencinin/sayfanın PDF'ini almak istiyorum**, ya da bir
+  düzeltmeyi TEK öğrenci üzerinde hızlıca test ediyorum → `capture.py`.
+  Tarayıcıda istediğin sayfaya git, terminale dönüp ENTER'a bas — sadece
+  o an açık olan sayfayı yakalar. Aynı oturumda başka bir sayfaya geçip
+  tekrar ENTER'a basarak istediğin kadar tekrarlayabilirsin (sınıfın
+  tamamını taramadan, tek tek).
+- **Bir sınavın TÜM öğrencilerini otomatik taramak istiyorum** (en yaygın
+  kullanım) → `scan_grade_center.py`. Grade Center'dan o sınavın
+  **herhangi bir** öğrencisinin sayfasını aç, ENTER'a bas — soldaki
+  "Öğrenciler" panelindeki herkesi kendisi sırayla gezip yakalar, daha
+  önce yakalanmış olanları atlar (yarıda kesilse bile kaldığı yerden
+  devam eder).
+- **Bir dersin Not Defteri'ndeki TÜM sınavları, her sınavın TÜM
+  öğrencilerini taramak istiyorum** (tek seferde bütün ders) →
+  `scan_course.py` (içeriden `scan_grade_center.py`'nin çekirdeğini
+  kullanır, sadece ders klasör katmanını da ekler).
+- **Öğrenci numaralarını PDF dosya adlarına eklemem gerekiyor** →
+  `scan_students.py` — diğer taramalardan ÖNCE, dersin "Öğrenciler"
+  sekmesinden CSV çıkarmak için bir kere çalıştırılır.
+- **Terminal yerine grafik arayüz istiyorum** → `gui.py` (ya da
+  `./start.sh` ile aynı şey, sanal ortamı da otomatik açar) — ders/sınav
+  seçip toplu tarama başlatmayı tıklamalarla yapar.
+- **Başka bir bilgisayardan taramanın durumunu (kaç öğrenci kaldı,
+  hangi PDF'ler çıktı) uzaktan izlemek istiyorum** → `web_view.py`
+  (bkz. aşağıdaki "Web Görünümü" bölümü).
+
 ## Hoca hesabı: scan_grade_center.py
 
 Bir hoca ekran görüntüsü sayesinde yazıldı: Grade Center'da bir öğrencinin
@@ -814,6 +842,71 @@ cevapları, not) içerir. `output/` ve `.state/` klasörleri `.gitignore`'a
 eklendi; bunları senkronize bir bulut klasörüne (iCloud/Dropbox vb.)
 koymaktan kaçının (GUI artık bu durumu da tespit edip uyarıyor — bkz.
 madde 5).
+
+## Uzun sınavlarda PDF'te eksik içerik (son sorunun cevabı/fotoğrafı kayboluyordu)
+
+**Belirti**: Çok soruluk (ör. 23 soru) sınavlarda, özellikle en sondaki
+kompozisyon sorusunun cevap metni ve/veya hocanın eklediği fotoğraf PDF'te
+görünmüyordu — ama aynı anda tarayıcıda (canlı DOM'da ve ekranda) içerik
+tamamen doğru duruyordu. Aynı soru bazı öğrencilerde çıkıyor, bazılarında
+çıkmıyordu (aralıklı/deterministik olmayan bir hata). `capture.py`'de
+sırayla bulunan/eklenen katmanlar:
+
+1. **Soru paneli kapalı gelebilir** — her soru ayrı bir açılır/kapanır
+   (accordion) panelde, panelin açık/kapalı durumu chevron butonunun
+   `aria-expanded` özniteliğinde tutuluyor. Şu ana kadar hep açık geldiği
+   gözlense de (henüz canlı doğrulanmadı), uzun soru/cevap içeriğinde
+   Blackboard bir paneli kapalı başlatırsa cevap hiç render edilmiyor
+   olabilir. `expand_all_questions_all_frames()` bunu print'ten önce iki
+   kez çalıştırıyor: bir kez kaydırmadan ÖNCE, bir kez sayfa TAMAMEN
+   kaydırılıp tüm sorular DOM'a girdikten SONRA (soru listesi de sanal/
+   virtualized olduğu için ilk turda henüz DOM'da olmayan bir panel
+   ikinci turda yakalanıyor).
+2. **Cevap kutusu (Quill editörü) geç doluyor** — `ESSAY_SETTLE_JS`,
+   `.readonly-essay-question .ql-editor` içindeki TÜM cevap kutularının
+   görünür metninin (placeholder'dan farklı, gerçek içerik) belirmesini
+   bekliyor — `ESSAY_SETTLE_MAX_POLLS` (10) × `ESSAY_SETTLE_POLL_MS`
+   (400ms) = en fazla 4 saniye. Öğrencinin gerçekten boş bırakmış olma
+   ihtimaline karşı bu adım ASLA hata fırlatmıyor, sadece bir şans
+   tanıyor. **Eğer başka bir sınavda hâlâ ara sıra boş cevap görürsen,
+   önce bu iki sabiti artırmayı dene** (`capture.py`'de tanımlı).
+3. **Print'ten hemen önceki "son temizlik" (`FINAL_CLEANUP_JS`) soru
+   listesinin yüksekliğini değiştirirken bir anlığına içeriği düşürüyordu**
+   — bu adımdan SONRA, print'ten HEMEN önce essay kontrolü bir kez daha
+   çalıştırılıyor (`settle_essay_answers_all_frames(page)`, cleanup'tan
+   sonra).
+4. **Asıl kök sebep — `page.pdf()`'in genişlik uyumsuzluğu**: script
+   boyunca (kaydırma, panel açma, cevap doğrulama) tarayıcı **1440px**
+   genişliğinde çalışıyordu (`common.DEFAULT_WINDOW_WIDTH`), ama
+   `page.pdf(format="A4")` içeride A4 kağıdının GERÇEK genişliğinde
+   (~793px) yeniden yerleşim hesaplıyordu. Sınav sorularını saran
+   konteyner sanal/virtualized bir liste olduğu için (`transform:
+   translateY(...)` deseni), bu genişlik farkı "hangi sorular şu an
+   görünür" hesabını bozup en sondaki soruyu (Soru 23 gibi) print anında
+   "aralık dışı" bırakıyordu — DOM'da/ekranda içerik hep vardı, sadece
+   `page.pdf()`'in kendi iç hesaplaması sırasında bir anlığına dışarıda
+   kalıyordu. **Çözüm**: `page.pdf()` artık `format="A4"` yerine, script
+   boyunca kullanılan AYNI genişlikle (`PDF_PAGE_WIDTH_PX` =
+   `DEFAULT_WINDOW_WIDTH`, A4 oranını koruyarak orantılı yükseklikte —
+   `PDF_PAGE_HEIGHT_PX`) çağrılıyor. **Eğer `DEFAULT_WINDOW_WIDTH`'i
+   `common.py`'de değiştirirsen, PDF sayfa genişliği de otomatik
+   güncellenir** (aynı sabitten türetiliyor) — elle senkronize etmene
+   gerek yok.
+5. **Yan etki — sol "Gezinme paneli" PDF'e sızdı**: genişlik 1440px'e
+   çıkınca, dar genişlikte muhtemelen hiç render edilmeyen sol panel
+   (Öğrenciler/Sorular sekmeleri, Not Verme Durumu filtresi, Notları
+   Gönder butonu — `<aside aria-label="Gezinme paneli">`) görünür oldu.
+   `HIDE_NAVIGATION_CHROME_CSS`'e `[aria-label="Gezinme paneli"]` eklendi.
+
+**Pratik özet**: Bunların hepsi `capture.py`/`scan_grade_center.py`
+çalıştırıldığında OTOMATIK uygulanıyor, elle bir şey açman/ayarlaman
+gerekmiyor. Eğer ileride başka bir sınav/senaryoda yine "cevap/fotoğraf
+eksik" görürsen, teşhis sırası şöyle olmalı (bu sırayla elendi):
+panel kapalı mı (`aria-expanded`) → DOM'da içerik var mı (konsolda
+`.ql-editor` metnini dök) → ekranda görünüyor mu (gerçekten canlı, elle
+kaydırarak kontrol et) → görünüyorsa suç `page.pdf()`'te demektir, bu
+durumda genişlik/yükseklik ayarlarına (`PDF_PAGE_WIDTH_PX`/
+`PDF_PAGE_HEIGHT_PX`) bak.
 
 ## Şu anki durum / sırada ne var
 

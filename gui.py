@@ -77,6 +77,7 @@ from common import (
     set_windows_dpi_awareness,
     summarize_download_overview,
     wait_for_blackboard,
+    write_scan_completion_status,
 )
 from scan_course import (
     GRADING_STATUS_COMPLETE_MARKERS_LABEL,
@@ -2333,13 +2334,20 @@ class BlackboardGUI:
             self._build_copy_row(info_inner, "Ref Kodu", manager.ref_code, pady_top=10)
             self._build_copy_row(info_inner, "PIN", manager.pin, pady_top=10)
 
-            status_text = "🟢 Canlı Yayın Aktif"
             if manager.last_sync_time:
                 sync_str = time.strftime("%H:%M:%S", time.localtime(manager.last_sync_time))
-                status_text += f" (Son Senkronizasyon: {sync_str})"
+                status_text = f"🟢 Canlı Yayın Aktif (Son Senkronizasyon: {sync_str})"
+                status_color = COLOR_SUCCESS
+            elif manager.last_error:
+                status_text = f"⚠️ Senkronizasyon Hatası: {manager.last_error}"
+                status_color = COLOR_WARNING
+            else:
+                status_text = "🟡 İlk Senkronizasyon Bekleniyor..."
+                status_color = COLOR_WARNING
 
             tk.Label(
-                card.inner, text=status_text, bg=COLOR_CARD, fg=COLOR_SUCCESS, font=("", 11, "bold"), anchor="w",
+                card.inner, text=status_text, bg=COLOR_CARD, fg=status_color, font=("", 11, "bold"), anchor="w",
+                wraplength=680, justify="left",
             ).pack(fill="x", pady=(0, 12))
 
             btn_row = tk.Frame(card.inner, bg=COLOR_CARD)
@@ -3172,6 +3180,13 @@ class BlackboardGUI:
         grades_url = live_url(page)
         totals = {"ok": 0, "skip": 0, "fail": 0}
         consecutive_failures = 0
+        # `for...else`: `else` blogu SADECE dongu hicbir `break` ile ERKEN
+        # kesilmeden (asagidaki TUM break'lerin HICBIRINE ugramadan) dogal
+        # olarak biterse calisir - "TUM sinav satirlari basariyla
+        # denendi mi" sorusuna, her break noktasina ayri ayri bir bayrak
+        # eklemeden CEVAP verir (bkz. write_scan_completion_status
+        # cagrisi, dongu sonrasi).
+        fully_completed = False
         for index, exam_row in enumerate(exam_rows):
             if self._stop_event.is_set():
                 emit("Kullanıcı isteğiyle durduruldu.")
@@ -3256,7 +3271,24 @@ class BlackboardGUI:
                            "yapıp 'Bul ve Tara'yı tekrarla)")
                     )
                     break
+        else:
+            fully_completed = True
         append_download_log(output_dir, f"{course_label} — Not Defteri", session_lines, totals)
+        # bkz. write_scan_completion_status docstring'i: web_view.py'nin
+        # durum sayfasindaki "X derste Y sinav bulundu, hepsi islendi"
+        # banner'i icin. Kullanicinin kendi durdurmasi (stopped_by_user
+        # AYRI bir kavram degil - fully_completed zaten bu durumda False
+        # kaliyor, cunku stop kontrolu de bir 'break') dahil HERHANGI bir
+        # erken kesilme, banner'in "tamamlandı" YERINE sessizce
+        # gosterilmemesine yol acar (bkz. web_view.py tarafi - False ise
+        # hic banner basmiyoruz, "yarım kaldı" diye YANLIS bir tamamlanma
+        # izlenimi vermek yerine).
+        try:
+            write_scan_completion_status(
+                output_dir, course_label, len(exam_rows), totals, fully_completed
+            )
+        except Exception:
+            pass
         self.gui_queue.put(("scan_done", totals))
 
     def _scan_grade_center(

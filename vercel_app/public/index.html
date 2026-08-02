@@ -181,6 +181,7 @@
       margin-bottom: 6px;
       background: linear-gradient(to right, #ffffff, #9aa7c2);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
     }
 
@@ -387,6 +388,54 @@
     }
     .live-dot { width: 8px; height: 8px; background: #4ade80; border-radius: 50%; animation: pulse 1.5s infinite; }
     @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+
+    .countdown-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 4px 12px 4px 8px;
+      border-radius: 20px;
+      font-size: 12.5px;
+      color: var(--text-color);
+      user-select: none;
+      backdrop-filter: blur(8px);
+      transition: all 0.3s ease;
+    }
+    .countdown-badge.refreshing {
+      border-color: rgba(96, 165, 250, 0.5);
+      background: rgba(59, 130, 246, 0.15);
+    }
+    .countdown-svg-wrapper {
+      position: relative;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .countdown-num-overlay {
+      position: absolute;
+      font-size: 10.5px;
+      font-weight: 800;
+      color: #93c5fd;
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1;
+    }
+    .countdown-label {
+      font-weight: 500;
+      color: #94a3b8;
+    }
+
+    .data-update-pulse {
+      animation: dataPulse 0.5s ease-out;
+    }
+    @keyframes dataPulse {
+      0% { opacity: 0.85; filter: brightness(1.1); transform: scale(0.998); }
+      50% { opacity: 1; filter: brightness(1.03); }
+      100% { opacity: 1; transform: scale(1); }
+    }
 
     .tabs-bar {
       display: flex;
@@ -613,7 +662,18 @@
         <span class="logo-badge">VERCEL CLOUD</span>
         <strong id="header-ref" style="font-family: 'JetBrains Mono', monospace;">REF-XXXX</strong>
       </div>
-      <div style="display: flex; align-items: center; gap: 16px;">
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <div id="refresh-badge" class="countdown-badge" title="Otomatik yenilenmeye kalan süre">
+          <div class="countdown-svg-wrapper">
+            <svg width="20" height="20" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9" stroke="rgba(255, 255, 255, 0.15)" stroke-width="2.5" fill="none"/>
+              <circle id="countdown-circle" cx="12" cy="12" r="9" stroke="#60a5fa" stroke-width="2.5" fill="none"
+                      stroke-dasharray="56.55" stroke-dashoffset="0" transform="rotate(-90 12 12)" style="transition: stroke-dashoffset 0.8s linear, stroke 0.3s ease;"/>
+            </svg>
+            <span id="countdown-num" class="countdown-num-overlay">5</span>
+          </div>
+          <span class="countdown-label">Yenileme: <strong id="countdown-text" style="color: #60a5fa; font-family: 'JetBrains Mono', monospace; font-weight: 700;">5s</strong></span>
+        </div>
         <span class="live-badge"><span class="live-dot"></span> Canlı Senkronize • <span id="last-sync-time">17:44:50</span></span>
         <button class="btn btn-secondary" style="padding: 6px 14px; font-size: 13px;" onclick="logout()">Çıkış</button>
       </div>
@@ -933,6 +993,7 @@
       document.getElementById('dash-screen').style.display = 'block';
       document.getElementById('header-ref').innerText = "DEMO-LIVE";
       renderData(demoData);
+      startAutoRefresh(true);
     }
 
     function logout() {
@@ -951,18 +1012,70 @@
       document.getElementById('tab-list-view').style.display = (tab === 'list') ? 'block' : 'none';
     }
 
-    function startAutoRefresh() {
+    let countdownSec = 5;
+
+    function updateCountdownUI(sec, isRefreshing = false) {
+      const numEl = document.getElementById('countdown-num');
+      const textEl = document.getElementById('countdown-text');
+      const circleEl = document.getElementById('countdown-circle');
+      const badgeEl = document.getElementById('refresh-badge');
+
+      if (isRefreshing) {
+        if (numEl) numEl.innerText = '⚡';
+        if (textEl) textEl.innerText = 'Yenileniyor...';
+        if (badgeEl) badgeEl.classList.add('refreshing');
+        if (circleEl) {
+          circleEl.style.strokeDashoffset = 0;
+          circleEl.style.stroke = '#34d399';
+        }
+        return;
+      }
+
+      if (badgeEl) badgeEl.classList.remove('refreshing');
+      if (numEl) numEl.innerText = sec;
+      if (textEl) textEl.innerText = sec + 's';
+
+      if (circleEl) {
+        const total = 56.55;
+        const progress = sec / 5;
+        const offset = total - (progress * total);
+        circleEl.style.strokeDashoffset = offset;
+        circleEl.style.stroke = (sec <= 1) ? '#f59e0b' : '#60a5fa';
+      }
+    }
+
+    function startAutoRefresh(isDemo = false) {
       clearInterval(refreshTimer);
+      countdownSec = 5;
+      updateCountdownUI(countdownSec);
+
       refreshTimer = setInterval(async () => {
-        if (!activeRef || !activePin) return;
-        try {
-          const resp = await fetch(`/api/view?ref_code=${encodeURIComponent(activeRef)}&pin=${encodeURIComponent(activePin)}`);
-          const json = await resp.json();
-          if (resp.ok && json.success) {
-            renderData(json.data);
+        countdownSec--;
+
+        if (countdownSec <= 0) {
+          updateCountdownUI(0, true);
+
+          if (!isDemo && activeRef && activePin) {
+            try {
+              const resp = await fetch(`/api/view?ref_code=${encodeURIComponent(activeRef)}&pin=${encodeURIComponent(activePin)}`);
+              const json = await resp.json();
+              if (resp.ok && json.success) {
+                renderData(json.data);
+              }
+            } catch (e) {}
+          } else if (isDemo) {
+            const syncEl = document.getElementById('last-sync-time');
+            if (syncEl) syncEl.innerText = new Date().toLocaleTimeString('tr-TR');
           }
-        } catch (e) {}
-      }, 5000);
+
+          countdownSec = 5;
+          setTimeout(() => {
+            updateCountdownUI(countdownSec);
+          }, 400);
+        } else {
+          updateCountdownUI(countdownSec);
+        }
+      }, 1000);
     }
 
     function renderData(data) {
@@ -972,6 +1085,14 @@
       const syncEl = document.getElementById('last-sync-time');
       if (syncEl) {
         syncEl.innerText = new Date().toLocaleTimeString('tr-TR');
+      }
+
+      // Smooth visual refresh effect on content container
+      const container = document.querySelector('#dash-screen .container');
+      if (container) {
+        container.classList.remove('data-update-pulse');
+        void container.offsetWidth; // trigger reflow for animation restart
+        container.classList.add('data-update-pulse');
       }
 
       allMissingStudentsMaster = [];

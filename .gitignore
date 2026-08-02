@@ -29,3 +29,10 @@ __pycache__/
 # Editor / OS
 .vscode/
 .DS_Store
+
+# Not / Yedek Markdown dosyaları
+gptbak.md
+metib.md
+notdefteri.md
+sunabibak.md
+d.md

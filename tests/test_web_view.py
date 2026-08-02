@@ -221,6 +221,50 @@ def test_dashboard_html_shows_missing_student_chip(tmp_path):
     assert "1 öğrenci eksik" in html_out
 
 
+def test_dashboard_html_shows_scan_done_banner_when_fully_completed(tmp_path):
+    # Kullanicinin istegi: bir dersin Not Defteri taramasi TUM sinav
+    # satirlarini islemeyi bitirdiginde, web durum sayfasinda bunu
+    # ACIKCA gosteren bir bildirim olsun (bkz. gui.py'deki
+    # write_scan_completion_status cagrisi, capture_exam_submissions
+    # dongusunun sonunda).
+    common.write_scan_completion_status(
+        tmp_path,
+        course_label="BST020 - Veri Madenciliği",
+        exam_count=6,
+        totals={"ok": 15, "skip": 3, "fail": 0},
+        fully_completed=True,
+    )
+
+    html_out = web_view._render_dashboard_html(tmp_path)
+
+    assert "Tarama tamamlandı" in html_out
+    assert "BST020 - Veri Madenciliği" in html_out
+    assert "6 sınav bulundu, hepsi işlendi" in html_out
+
+
+def test_dashboard_html_hides_scan_done_banner_when_not_fully_completed(tmp_path):
+    # bkz. _render_scan_status_banner_html docstring'i: yarim kalan bir
+    # tarama icin banner BILEREK gosterilmiyor - "hepsi bitti" YANLIS
+    # izlenimi vermemek icin.
+    common.write_scan_completion_status(
+        tmp_path,
+        course_label="BST020 - Veri Madenciliği",
+        exam_count=6,
+        totals={"ok": 2, "skip": 0, "fail": 1},
+        fully_completed=False,
+    )
+
+    html_out = web_view._render_dashboard_html(tmp_path)
+
+    assert "Tarama tamamlandı" not in html_out
+
+
+def test_dashboard_html_hides_scan_done_banner_when_no_status_file(tmp_path):
+    html_out = web_view._render_dashboard_html(tmp_path)
+
+    assert "Tarama tamamlandı" not in html_out
+
+
 def test_dashboard_html_escapes_names():
     escaped = web_view.html.escape("Veri & Yapay Zeka <Lab>")
     assert escaped == "Veri &amp; Yapay Zeka &lt;Lab&gt;"

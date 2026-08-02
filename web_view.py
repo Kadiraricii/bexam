@@ -37,7 +37,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from common import DownloadOverview, collect_download_overview, summarize_download_overview
+from common import (
+    DownloadOverview,
+    collect_download_overview,
+    read_scan_completion_status,
+    summarize_download_overview,
+)
 
 DEFAULT_PORT = 8899
 PORT_SEARCH_ATTEMPTS = 10
@@ -417,11 +422,58 @@ def _render_pin_page_html(error: str | None = None) -> str:
 </body></html>"""
 
 
+def _format_scan_finished_at(raw: str) -> str:
+    """write_scan_completion_status'un yazdigi ISO zaman damgasini
+    (ör. '2026-08-02T16:20:05') insan-okunur 'GG.AA.YYYY SS:DD' bicimine
+    cevirir - ayristirma basarisiz olursa (ör. eski/bozuk bir dosya
+    formati) ham degeri oldugu gibi doner, banner'in TAMAMEN
+    gorunmemesindense kaba bir bicimde gorunmesi tercih edilir."""
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(raw).strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return raw
+
+
+def _render_scan_status_banner_html(output_dir: Path) -> str:
+    """write_scan_completion_status'un yazdigi son tarama kaydini okuyup
+    (varsa VE tarama HICBIR erken kesilme olmadan TUM sinav satirlarinin
+    sonuna ulasmissa) bir tamamlanma banner'i doner - aksi halde bos
+    string (banner HIC gosterilmez). fully_completed=False durumunu
+    BILEREK sessiz geciyoruz: "yarım kaldı" gibi belirsiz bir banner
+    gostermek, hocaya YANLIŞLIKLA "her şey bitti" izlenimi UYANDIRABILIR -
+    zaten normal sınav kartları (asagida) eksik olan ogrencileri ayrintili
+    gosteriyor, bu banner SADECE net bir "hepsi bitti" durumunda deger
+    katiyor."""
+    status = read_scan_completion_status(output_dir)
+    if not status or not status.get("fully_completed") or not status.get("exam_count"):
+        return ""
+    course_label = html.escape(str(status.get("course_label", "")))
+    exam_count = status.get("exam_count", 0)
+    totals = status.get("totals") or {}
+    finished_at = _format_scan_finished_at(str(status.get("finished_at", "")))
+    return f"""<div class="scan-done-banner">
+  <div class="scan-done-icon">✅</div>
+  <div>
+    <div class="scan-done-title">Tarama tamamlandı — {course_label}</div>
+    <div class="scan-done-sub">
+      {exam_count} sınav bulundu, hepsi işlendi
+      (yakalanan {totals.get('ok', 0)}, atlanan {totals.get('skip', 0)}, hatalı {totals.get('fail', 0)}) —
+      {html.escape(finished_at)}
+    </div>
+  </div>
+</div>"""
+
+
 def _render_dashboard_html(output_dir: Path) -> str:
     data: DownloadOverview = collect_download_overview(output_dir)
     summary = summarize_download_overview(data)
 
     parts: list[str] = []
+    scan_banner_html = _render_scan_status_banner_html(output_dir)
+    if scan_banner_html:
+        parts.append(scan_banner_html)
     if summary is not None:
         stat_cells = [
             (str(summary["total_exams"]), "sınav"),
@@ -461,6 +513,13 @@ def _render_dashboard_html(output_dir: Path) -> str:
   .page {{ max-width: 1080px; margin: 0 auto; padding: 24px; }}
   h1 {{ font-size: 22px; margin: 0 0 4px; }}
   .sub {{ color: var(--muted); font-size: 13px; margin: 0 0 20px; }}
+  .scan-done-banner {{
+    display: flex; align-items: center; gap: 14px; background: var(--success-soft);
+    border: 1px solid var(--success); border-radius: 12px; padding: 14px 18px; margin-bottom: 20px;
+  }}
+  .scan-done-icon {{ font-size: 24px; line-height: 1; }}
+  .scan-done-title {{ font-weight: 700; font-size: 14.5px; color: #14532D; }}
+  .scan-done-sub {{ font-size: 12.5px; color: #166534; margin-top: 2px; }}
   .stat-strip {{
     display: flex; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border);
     border-radius: 12px; overflow: hidden; margin-bottom: 20px;

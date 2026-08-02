@@ -689,6 +689,55 @@ def now_stamp() -> str:
 
 
 DOWNLOAD_LOG_FILENAME = "indirme_log.txt"
+# output/ klasorunun KOKUNDE (ders altinda DEGIL) duran, TEK bir "son
+# tarama" kaydi - web_view.py'nin gosterdigi durum sayfasi (birden fazla
+# dersi TEK ekranda listeleyen) bu yuzden ders-bazli degil, en son
+# calisan taramayla ilgili genel bir bildirim gosterir.
+SCAN_STATUS_FILENAME = "son_tarama_durumu.json"
+
+
+def write_scan_completion_status(
+    output_dir: Path,
+    course_label: str,
+    exam_count: int,
+    totals: dict,
+    fully_completed: bool,
+) -> None:
+    """Bir 'Not Defteri' taramasi (find_exam_row_names'in buldugu TUM
+    sinav satirlarini islemeyi deneyen dongu) bittiginde cagrilir -
+    web_view.py'nin durum sayfasinda "X derste Y sinav bulundu, hepsi
+    islendi" turu bir bildirim gosterebilmesi icin.
+
+    fully_completed: dongu HICBIR 'break' ile ERKEN kesilmeden (kullanici
+    durdurmasi, oturum dusmesi, art arda hata, navigasyon kaybi vb.
+    OLMADAN) TUM exam_rows'un sonuna ulasildi mi. False ise durum sayfasi
+    bunu "tamamlandı" DEGIL "yarım kaldı" olarak gostermeli - aksi halde
+    hoca yanlislikla hicbir sinavin eksik kalmadigini SANABILIR."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "course_label": course_label,
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "exam_count": exam_count,
+        "fully_completed": fully_completed,
+        "totals": totals,
+    }
+    status_path = output_dir / SCAN_STATUS_FILENAME
+    tmp_path = status_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(status_path)
+
+
+def read_scan_completion_status(output_dir: Path) -> dict | None:
+    """write_scan_completion_status'un yazdigi son kaydi okur - dosya
+    yoksa ya da bozuksa (ör. yaridan kesilmis bir yazma) sessizce None
+    doner, cagiran taraf (web_view.py) bu durumda banner'i gostermez."""
+    status_path = output_dir / SCAN_STATUS_FILENAME
+    if not status_path.exists():
+        return None
+    try:
+        return json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def append_download_log(output_dir: Path, title: str, lines: list[str], totals: dict) -> None:
