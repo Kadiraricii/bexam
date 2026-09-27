@@ -1823,7 +1823,7 @@ class BlackboardGUI:
             empty_row.pack(fill="x", pady=8)
             tk.Label(empty_row, text="📁", bg=COLOR_BG, font=_emoji_font(13)).pack(side="left", padx=(0, 6))
             tk.Label(
-                empty_row, text="Klasör henüz oluşturulmadı (ilk indirmede oluşacak)",
+                empty_row, text="Klasör henüz oluşturulmadı (ilk taramada ya da indirmede oluşacak)",
                 bg=COLOR_BG, fg=COLOR_MUTED, font=FONT_BODY, anchor="w",
             ).pack(side="left")
             return
@@ -3040,8 +3040,24 @@ class BlackboardGUI:
         course_label = derive_course_label(page)
         course_dir = output_dir / sanitize_filename(course_label, max_chars=DEFAULT_FOLDER_MAX_CHARS)
 
+        def ensure_course_dir() -> bool:
+            try:
+                course_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                self.gui_queue.put((
+                    "log",
+                    f"'{course_label}' ders klasörü oluşturulamadı: {exc}\n"
+                    "Çıktı klasörünü ve yazma izinlerini kontrol et.",
+                ))
+                self.gui_queue.put(("discovery_failed", None))
+                return False
+            self.gui_queue.put(("log", f"Ders klasörü hazır: {course_dir}"))
+            return True
+
         exam_rows, excluded_exam_names = find_exam_row_names(page)
         if exam_rows:
+            if not ensure_course_dir():
+                return
             listed = "\n".join(f"  - {er.name}" for er in exam_rows)
             excluded_note = ""
             if excluded_exam_names:
@@ -3072,6 +3088,8 @@ class BlackboardGUI:
 
         student_rows = find_student_rows(page)
         if student_rows:
+            if not ensure_course_dir():
+                return
             exam_label = course_label
             self.gui_queue.put((
                 "log", f"Sınav öğrenci listesi algılandı ({exam_label}): {len(student_rows)} öğrenci bulundu."
@@ -3541,6 +3559,8 @@ class BlackboardGUI:
                 self.compact_percent_label.config(text="0%")
                 self.compact_progress_bar.set_progress(0.0)
                 self.compact_counts_label.config(text=f"0 / {count} öğe")
+            if self.current_page == "download":
+                self._refresh_download_cards()
         elif kind == "discovery_failed":
             self._pending_discovery = None
             self._scan_enabled = self._connection_state == "connected"
